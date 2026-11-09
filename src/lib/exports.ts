@@ -44,7 +44,7 @@ function zoomStyles(): string {
 
 export function buildStudentCsv(students: Student[]): string {
   return buildCsv(
-    ['班级学号', '学号', '姓名', '性别', '手机', '宿舍', '床位', '备注'],
+    ['短学号', '学号', '姓名', '性别', '手机', '宿舍', '床位', '备注'],
     students.map((student) => [
       student.shortNo,
       student.studentNo,
@@ -65,7 +65,7 @@ export function buildAttendanceCsv(
 ): string {
   const records = new Map(session.records.map((record) => [record.studentId, record]));
   return buildCsv(
-    ['日期', '点名标题', '班级', '班级学号', '学号', '姓名', '状态', '备注', '备注图片数'],
+    ['日期', '点名标题', '班级', '短学号', '学号', '姓名', '状态', '备注', '备注图片数'],
     students.map((student) => {
       const record = records.get(student.id);
       return [
@@ -86,7 +86,7 @@ export function buildAttendanceCsv(
 export function buildTaskCsv(task: CollectionTask, students: Student[]): string {
   const submissions = new Map(task.submissions.map((submission) => [submission.studentId, submission]));
   return buildCsv(
-    ['任务', '截止时间', '班级学号', '学号', '姓名', '提交状态', '备注', '附件数', '附件名称'],
+    ['任务', '截止时间', '短学号', '学号', '姓名', '提交状态', '备注', '附件数', '附件名称'],
     students.map((student) => {
       const submission = submissions.get(student.id);
       return [
@@ -153,7 +153,8 @@ export async function buildTaskHtmlReport(
   .summary { display:flex; gap:14px; margin:26px 0; flex-wrap:wrap; }
   .metric { min-width:120px; padding:14px 20px; border:1px solid var(--line); border-radius:12px; background:#f9fbf9; }
   .metric b { display:block; font-size:25px; color:var(--accent); }
-  table { width:100%; border-collapse:collapse; font-size:13.5px; }
+  .table-scroll { width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  table { width:100%; min-width:760px; border-collapse:collapse; font-size:13.5px; }
   th, td { border-bottom:1px solid var(--line); padding:12px 10px; text-align:left; vertical-align:top; }
   th { background:#f1f5f2; font-size:12.5px; color:var(--muted); }
   .short-no { font-weight:700; color:var(--accent); white-space:nowrap; }
@@ -169,6 +170,7 @@ export async function buildTaskHtmlReport(
   figcaption { font-size:10.5px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .muted { color:#9aa6a0; }
   ${zoomStyles()}
+  @media (max-width:760px) { body { padding:12px; } main { padding:18px; border-radius:12px; } h1 { font-size:24px; } .summary { gap:8px; } .metric { min-width:92px; padding:10px 12px; } }
   @media print { body { padding:0; background:white; } main { box-shadow:none; padding:20px; } }
 </style>
 </head>
@@ -186,10 +188,12 @@ export async function buildTaskHtmlReport(
     <div class="metric">未完成 <b>${missing}</b></div>
     <div class="metric">待检查 <b>${pending}</b></div>
   </div>
-  <table>
-    <thead><tr><th>班级学号</th><th>学号</th><th>姓名</th><th>状态</th><th>备注</th><th>提交凭证</th></tr></thead>
-    <tbody>${rows.join('')}</tbody>
-  </table>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>短学号</th><th>学号</th><th>姓名</th><th>状态</th><th>备注</th><th>提交凭证</th></tr></thead>
+      <tbody>${rows.join('')}</tbody>
+    </table>
+  </div>
 </main>
 <div id="lightbox" class="lightbox"><img id="lightbox-image" alt="放大查看"></div>
 ${zoomScript()}
@@ -247,7 +251,8 @@ export async function buildAttendanceHtmlReport(
   .summary { display:flex; gap:12px; margin:26px 0; flex-wrap:wrap; }
   .metric { min-width:105px; padding:13px 17px; border:1px solid var(--line); border-radius:12px; background:#f9fbf9; }
   .metric b { display:block; font-size:24px; color:var(--accent); }
-  table { width:100%; border-collapse:collapse; font-size:13.5px; }
+  .table-scroll { width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  table { width:100%; min-width:760px; border-collapse:collapse; font-size:13.5px; }
   th, td { border-bottom:1px solid var(--line); padding:12px 10px; text-align:left; vertical-align:top; }
   th { background:#f1f5f2; font-size:12.5px; color:var(--muted); }
   .short-no { font-weight:700; color:var(--accent); white-space:nowrap; }
@@ -265,6 +270,7 @@ export async function buildAttendanceHtmlReport(
   figcaption { font-size:10.5px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .muted { color:#9aa6a0; }
   ${zoomStyles()}
+  @media (max-width:760px) { body { padding:12px; } main { padding:18px; border-radius:12px; } h1 { font-size:24px; } .summary { gap:8px; } .metric { min-width:92px; padding:10px 12px; } }
   @media print { body { padding:0; background:white; } main { box-shadow:none; padding:20px; } }
 </style>
 </head>
@@ -282,10 +288,12 @@ export async function buildAttendanceHtmlReport(
     <div class="metric">缺勤 <b>${counts.absent}</b></div>
     <div class="metric">未点名 <b>${counts.unmarked}</b></div>
   </div>
-  <table>
-    <thead><tr><th>班级学号</th><th>学号</th><th>姓名</th><th>状态</th><th>备注</th><th>备注图片</th></tr></thead>
-    <tbody>${rows.join('')}</tbody>
-  </table>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>短学号</th><th>学号</th><th>姓名</th><th>状态</th><th>备注</th><th>备注图片</th></tr></thead>
+      <tbody>${rows.join('')}</tbody>
+    </table>
+  </div>
 </main>
 <div id="lightbox" class="lightbox"><img id="lightbox-image" alt="放大查看"></div>
 ${zoomScript()}
@@ -306,7 +314,7 @@ export async function buildTaskXlsx(
     views: [{ state: 'frozen', ySplit: 1 }],
   });
   sheet.columns = [
-    { header: '班级学号', key: 'shortNo', width: 12 },
+    { header: '短学号', key: 'shortNo', width: 12 },
     { header: '学号', key: 'studentNo', width: 16 },
     { header: '姓名', key: 'name', width: 14 },
     { header: '提交状态', key: 'status', width: 13 },
@@ -327,7 +335,7 @@ export async function buildTaskXlsx(
   infoRow.getCell(1).font = { size: 10, color: { argb: 'FF71807A' } };
   infoRow.getCell(1).alignment = { vertical: 'middle', wrapText: true };
 
-  const headerRow = sheet.addRow(['班级学号', '学号', '姓名', '提交状态', '备注', '附件1', '附件2', '附件3']);
+  const headerRow = sheet.addRow(['短学号', '学号', '姓名', '提交状态', '备注', '附件1', '附件2', '附件3']);
   headerRow.font = { bold: true, color: { argb: 'FF17352E' } };
   headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8F3ED' } };
   headerRow.alignment = { vertical: 'middle' };

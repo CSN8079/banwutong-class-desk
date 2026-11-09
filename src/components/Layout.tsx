@@ -1,6 +1,7 @@
 import {
   BookOpenCheck,
   CalendarCheck2,
+  Check,
   ChevronDown,
   ClipboardList,
   GraduationCap,
@@ -9,7 +10,7 @@ import {
   ShieldCheck,
   UsersRound,
 } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { ClassRoom, PageKey } from '../types';
 import { formatFullDate } from '../lib/format';
 
@@ -21,6 +22,67 @@ const navItems: Array<{ key: PageKey; label: string; shortLabel: string; icon: t
   { key: 'records', label: '点名记录', shortLabel: '记录', icon: BookOpenCheck },
   { key: 'settings', label: '设置与数据', shortLabel: '设置', icon: Settings2 },
 ];
+
+
+function ClassPicker({
+  classes,
+  selectedClassId,
+  onClassChange,
+  compact = false,
+}: {
+  classes: ClassRoom[];
+  selectedClassId: string;
+  onClassChange: (classId: string) => void;
+  compact?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const selected = classes.find((item) => item.id === selectedClassId) ?? classes[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div className={`class-picker ${compact ? 'class-picker-compact' : ''}`} ref={rootRef}>
+      <button className="class-picker-trigger" onClick={() => setOpen((value) => !value)} aria-haspopup="listbox" aria-expanded={open}>
+        <span className="class-picker-mark" style={{ background: selected?.color ?? '#1d7a5f' }} />
+        <strong>{selected?.name ?? '请选择班级'}</strong>
+        <ChevronDown size={15} className={open ? 'rotated' : ''} />
+      </button>
+      {open && (
+        <div className="class-picker-menu" role="listbox" aria-label="选择班级">
+          <span className="class-picker-caption">切换班级</span>
+          {classes.map((item) => (
+            <button
+              key={item.id}
+              role="option"
+              aria-selected={item.id === selected?.id}
+              className={item.id === selected?.id ? 'active' : ''}
+              onClick={() => { onClassChange(item.id); setOpen(false); }}
+            >
+              <span className="class-picker-mark" style={{ background: item.color }} />
+              <span><strong>{item.name}</strong><small>{item.grade} · {item.major}</small></span>
+              {item.id === selected?.id && <Check size={15} />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface LayoutProps {
   children: ReactNode;
@@ -57,13 +119,7 @@ export function Layout({
 
         <div className="sidebar-class">
           <span>当前班级</span>
-          <div className="class-select-wrap">
-            <select value={selectedClassId} onChange={(event) => onClassChange(event.target.value)}>
-              {classes.length === 0 && <option value="">请先创建班级</option>}
-              {classes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-            </select>
-            <ChevronDown size={15} />
-          </div>
+          <ClassPicker classes={classes} selectedClassId={selectedClassId} onClassChange={onClassChange} />
           <p>{activeClass ? `${activeClass.grade} · ${activeClass.major}` : '尚未设置班级信息'}</p>
         </div>
 
@@ -90,7 +146,7 @@ export function Layout({
             <ShieldCheck size={18} />
             <span><strong>数据仅保存在本机</strong><small>不上传云端，保护学生隐私</small></span>
           </div>
-          <span className="version">班务通 v1.1.0</span>
+          <span className="version">班务通 v1.2.0</span>
         </div>
       </aside>
 
@@ -107,12 +163,7 @@ export function Layout({
           </div>
           <div className="topbar-actions">
             <span className="local-pill"><ShieldCheck size={14} /> 本地模式</span>
-            <label className="mobile-class-select">
-              <select value={selectedClassId} onChange={(event) => onClassChange(event.target.value)} aria-label="切换班级">
-                {classes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-              </select>
-              <ChevronDown size={14} />
-            </label>
+            <ClassPicker classes={classes} selectedClassId={selectedClassId} onClassChange={onClassChange} compact />
           </div>
         </header>
 

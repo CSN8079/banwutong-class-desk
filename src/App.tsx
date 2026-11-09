@@ -11,6 +11,7 @@ import { RecordsPage } from './pages/RecordsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { useAppStore } from './store/useAppStore';
 import { useToast } from './components/toast-context';
+import { applyThemeMode } from './lib/theme';
 import type { PageKey } from './types';
 
 const pages: PageKey[] = ['dashboard', 'students', 'attendance', 'tasks', 'records', 'settings'];
@@ -27,6 +28,7 @@ export default function App() {
   const selectedClassId = useAppStore((state) => state.selectedClassId);
   const setSelectedClass = useAppStore((state) => state.setSelectedClass);
   const addClass = useAppStore((state) => state.addClass);
+  const themeMode = useAppStore((state) => state.themeMode);
   const { showToast } = useToast();
   const lastBackPressRef = useRef(0);
   const [page, setPage] = useState<PageKey>(pageFromHash);
@@ -40,6 +42,14 @@ export default function App() {
     const completed = task.submissions.filter((submission) => submission.status === 'completed').length;
     return completed < classStudents.length;
   }).length;
+
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const apply = () => applyThemeMode(themeMode);
+    apply();
+    if (themeMode === 'system') media.addEventListener('change', apply);
+    return () => media.removeEventListener('change', apply);
+  }, [themeMode]);
 
   useEffect(() => {
     const handleHashChange = () => setPage(pageFromHash());

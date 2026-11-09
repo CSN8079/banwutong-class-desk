@@ -13,6 +13,7 @@ import {
   ImagePlus,
   Images,
   MessageSquareText,
+  Phone,
   Plus,
   RotateCcw,
   Search,
@@ -28,11 +29,13 @@ import { useAppStore } from '../store/useAppStore';
 import { isoDate } from '../data/seed';
 import { Avatar, EmptyState, LoadingButton, Modal, PageHeading } from '../components/ui';
 import { useToast } from '../components/toast-context';
-import { attendanceLabels, formatDateTime } from '../lib/format';
+import { LongPressButton } from '../components/LongPressButton';
+import { attendanceLabels, formatDateChinese, formatDateTime } from '../lib/format';
 import { buildAttendanceCsv, buildAttendanceHtmlReport } from '../lib/exports';
 import { saveFile } from '../lib/download';
 import { blobToDataUrl, compressImage, deleteImage, getImage, putImage } from '../lib/imageStore';
 import { createId } from '../lib/id';
+import { callPhoneNumber } from '../lib/call';
 import type { AttendanceStatus, PageKey, Student, TaskAttachment } from '../types';
 
 const statusConfig: Array<{ key: Exclude<AttendanceStatus, 'unmarked'>; icon: typeof CheckCircle2 }> = [
@@ -56,6 +59,22 @@ interface UndoEntry {
   studentId: string;
   status: AttendanceStatus;
   note: string;
+}
+
+function getCalendarCells(month: string) {
+  const [year, monthIndex] = month.split('-').map(Number);
+  const firstWeekday = new Date(year, monthIndex - 1, 1).getDay();
+  const daysInMonth = new Date(year, monthIndex, 0).getDate();
+  return [
+    ...Array.from({ length: firstWeekday }, () => null),
+    ...Array.from({ length: daysInMonth }, (_, index) => index + 1),
+  ];
+}
+
+function shiftCalendarMonth(month: string, delta: number) {
+  const [year, monthIndex] = month.split('-').map(Number);
+  const next = new Date(year, monthIndex - 1 + delta, 1);
+  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`;
 }
 
 function makeAttendanceAttachment(file: File, blob: Blob): TaskAttachment {
@@ -116,6 +135,7 @@ export function AttendancePage({ onNavigate }: AttendancePageProps) {
   const addAttendanceAttachment = useAppStore((state) => state.addAttendanceAttachment);
   const removeAttendanceAttachment = useAppStore((state) => state.removeAttendanceAttachment);
   const completeSession = useAppStore((state) => state.completeSession);
+  const reopenSession = useAppStore((state) => state.reopenSession);
   const { showToast } = useToast();
   const classRoom = classes.find((item) => item.id === selectedClassId);
   const students = useMemo(
@@ -138,6 +158,10 @@ export function AttendancePage({ onNavigate }: AttendancePageProps) {
   const [cardUploading, setCardUploading] = useState(false);
   const [randomOpen, setRandomOpen] = useState(false);
   const [randomStudent, setRandomStudent] = useState<Student | null>(null);
+  const [randomScope, setRandomScope] = useState<'unmarked' | 'all' | 'marked'>('unmarked');
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [calendarMonth, setCalendarMonth] = useState(date.slice(0, 7));
   const [viewMode, setViewMode] = useState<'list' | 'card'>('list');
   const [cardIndex, setCardIndex] = useState(0);
   const [undoStack, setUndoStack] = useState<UndoEntry[]>([]);
@@ -184,13 +208,6 @@ export function AttendancePage({ onNavigate }: AttendancePageProps) {
   const countByStatus = (status: AttendanceStatus) =>
     students.filter((student) => (records.get(student.id)?.status ?? 'unmarked') === status).length;
 
-  const changeDate = (days: number) => {
-    const next = new Date(`${date}T12:00:00`);
-    next.setDate(next.getDate() + days);
-    setDate(isoDate(next));
-    setSelectedSessionId('');
-  };
-
   const openNewSession = () => {
     setNewSessionTitle(`第 ${daySessions.length + 1} 次点名`);
     setNewSessionOpen(true);
@@ -223,7 +240,11 @@ export function AttendancePage({ onNavigate }: AttendancePageProps) {
     if (!session) return;
     saveCardUndo(student.id);
     const current = records.get(student.id)?.status ?? 'unmarked';
-    setAttendance(session.id, student.id, current === status ? 'unmarked' : status);
+    const togglingOff = current === status;
+    setAttendance(session.id, student.id, togglingOff ? 'unmarked' : status);
+    if (!togglingOff && cardIndex < students.length - 1) {
+      window.setTimeout(() => setCardIndex((index) => Math.min(students.length - 1, index + 1)), 260);
+    }
   };
 
   const undoLast = () => {
@@ -257,6 +278,21 @@ export function AttendancePage({ onNavigate }: AttendancePageProps) {
     setNoteStudentId(student.id);
     setNoteDraft(records.get(student.id)?.note ?? '');
     setNoteStatusDraft(records.get(student.id)?.status ?? 'unmarked');
+  };
+
+  const callStudent = async (student: Student) => {
+    try {
+      await callPhoneNumber(student.phone);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '无法打开系统拨号应用', 'error');
+    }
+  };
+
+  const clearStudentNote = (student: Student) => {
+    if (!session) return;
+    setAttendance(session.id, student.id, records.get(student.id)?.status ?? 'unmarked', '');
+    if (noteStudentId === student.id) setNoteDraft('');
+    showToast(`${student.name} 的备注已清除`, 'info');
   };
 
   const restorePagePosition = () => {
@@ -388,16 +424,44 @@ export function AttendancePage({ onNavigate }: AttendancePageProps) {
     }
   };
 
+  const openCalendar = () => {
+    setCalendarMonth(date.slice(0, 7));
+    setCalendarOpen(true);
+  };
+
+  const reopenCompletedSession = (sessionId: string) => {
+    reopenSession(sessionId);
+    setSelectedSessionId(sessionId);
+    setHistoryOpen(false);
+    showToast('已重新启动该点名场次，可继续修改');
+  };
+
   const openRandom = () => {
     setRandomStudent(null);
     setRandomOpen(true);
   };
 
+  const randomPool = students.filter((student) => {
+    const status = records.get(student.id)?.status ?? 'unmarked';
+    if (randomScope === 'unmarked') return status === 'unmarked';
+    if (randomScope === 'marked') return status !== 'unmarked';
+    return true;
+  });
+
   const drawRandom = () => {
-    if (students.length === 0) return;
-    const pool = students.filter((student) => (records.get(student.id)?.status ?? 'unmarked') === 'unmarked');
-    const candidates = pool.length > 0 ? pool : students;
-    setRandomStudent(candidates[Math.floor(Math.random() * candidates.length)]);
+    if (randomPool.length === 0) {
+      showToast(randomScope === 'unmarked' ? '当前没有未点名学生' : randomScope === 'marked' ? '当前没有已点名学生' : '班级中没有学生', 'error');
+      return;
+    }
+    setRandomStudent(randomPool[Math.floor(Math.random() * randomPool.length)]);
+  };
+
+  const markRandomStatus = (status: Exclude<AttendanceStatus, 'unmarked'>) => {
+    if (!session || !randomStudent) return;
+    setAttendance(session.id, randomStudent.id, status);
+    showToast(`${randomStudent.name} 已标记为${attendanceLabels[status]}`);
+    setRandomOpen(false);
+    setRandomStudent(null);
   };
 
   if (students.length === 0) {
@@ -441,11 +505,14 @@ export function AttendancePage({ onNavigate }: AttendancePageProps) {
               <span>上一位</span><strong>{students[cardIndex - 1]?.name ?? '已是第一位'}</strong>
             </button>
             {cardStudent && (
-              <article className={`flash-card flash-card-${cardStatus}`}>
+              <article className={`flash-card flash-card-${cardStatus} flash-card-gender-${cardStudent.gender}`}>
                 <div className="flash-card-index">{cardIndex + 1} / {students.length}</div>
-                <Avatar name={cardStudent.name} size="lg" />
-                <span className="flash-short-no">班级学号 {cardStudent.shortNo}</span>
-                <h2>{cardStudent.name}</h2>
+                <Avatar name={cardStudent.name} gender={cardStudent.gender} size="lg" />
+                <span className="flash-short-no">短学号 {cardStudent.shortNo}</span>
+                <div className="flash-name-row">
+                  <h2>{cardStudent.name}</h2>
+                  <button className="inline-call-button" onClick={() => void callStudent(cardStudent)} aria-label={`拨打 ${cardStudent.name} 的电话`}><Phone size={17} /></button>
+                </div>
                 <p>{cardStudent.studentNo || '未填写长学号'} · {cardStudent.dorm || '未填写宿舍'}{cardStudent.bed ? ` · ${cardStudent.bed}` : ''}</p>
                 <div className="flash-status-buttons">
                   {statusConfig.map(({ key, icon: Icon }) => (
@@ -502,9 +569,11 @@ export function AttendancePage({ onNavigate }: AttendancePageProps) {
         <>
           <section className="attendance-control panel">
             <div className="date-control">
-              <button className="icon-button" onClick={() => changeDate(-1)} aria-label="前一天"><ChevronLeft size={18} /></button>
-              <label><CalendarDays size={17} /><input type="date" value={date} onChange={(event) => { setDate(event.target.value); setSelectedSessionId(''); }} /></label>
-              <button className="icon-button" onClick={() => changeDate(1)} aria-label="后一天"><ChevronRight size={18} /></button>
+              <button className="date-picker-trigger" onClick={openCalendar}>
+                <CalendarDays size={18} />
+                <span>{formatDateChinese(date)}</span>
+                <ChevronRight size={16} />
+              </button>
               {date !== isoDate() && <button className="text-button" onClick={() => { setDate(isoDate()); setSelectedSessionId(''); }}>回到今天</button>}
             </div>
             <div className="active-session-tabs">
@@ -514,9 +583,17 @@ export function AttendancePage({ onNavigate }: AttendancePageProps) {
                   {item.title}
                 </button>
               ))}
-              <button className="new-session-inline" onClick={openNewSession}><Plus size={15} /> 新建</button>
             </div>
           </section>
+
+          <button className="completed-entry panel" onClick={() => setHistoryOpen(true)}>
+            <span className="completed-entry-icon"><CheckCircle2 size={20} /></span>
+            <span className="completed-entry-copy">
+              <strong>已完成点名</strong>
+              <small>{completedSessions.length > 0 ? `查看当天 ${completedSessions.length} 个已完成场次，可重新启动修改` : '当天暂无已完成场次'}</small>
+            </span>
+            <ChevronRight size={19} />
+          </button>
 
           {!session ? (
             <section className="panel">
@@ -535,13 +612,16 @@ export function AttendancePage({ onNavigate }: AttendancePageProps) {
                   <h2>{session.title}</h2>
                   <p>{date} · 创建于 {formatDateTime(session.createdAt)}</p>
                 </div>
-                <div className="session-export-actions">
-                  <button className="button button-secondary" disabled={exporting === 'csv'} onClick={() => void exportAttendance('csv')}>
-                    <LoadingButton loading={exporting === 'csv'}><Download size={16} /> CSV</LoadingButton>
-                  </button>
-                  <button className="button button-secondary" disabled={exporting === 'html'} onClick={() => void exportAttendance('html')}>
-                    <LoadingButton loading={exporting === 'html'}><FileText size={16} /> HTML</LoadingButton>
-                  </button>
+                <div className="session-export-block">
+                  <span className="export-caption">导出本次点名记录</span>
+                  <div className="session-export-actions">
+                    <button className="button button-secondary" disabled={exporting === 'csv'} onClick={() => void exportAttendance('csv')}>
+                      <LoadingButton loading={exporting === 'csv'}><Download size={16} /> CSV</LoadingButton>
+                    </button>
+                    <button className="button button-secondary" disabled={exporting === 'html'} onClick={() => void exportAttendance('html')}>
+                      <LoadingButton loading={exporting === 'html'}><FileText size={16} /> HTML</LoadingButton>
+                    </button>
+                  </div>
                 </div>
               </section>
 
@@ -555,7 +635,7 @@ export function AttendancePage({ onNavigate }: AttendancePageProps) {
               </section>
 
               <section className="attendance-toolbar panel">
-                <div className="search-box"><Search size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索姓名、班级学号或学号" />{search && <button onClick={() => setSearch('')}>清除</button>}</div>
+                <div className="search-box"><Search size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索姓名、短学号或学号" />{search && <button onClick={() => setSearch('')}>清除</button>}</div>
                 <div className="attendance-summary-inline">
                   <span><i className="legend-dot" style={{ background: '#1d7a5f' }} /> 实到 {present} 人</span>
                   <span><i className="legend-dot" style={{ background: '#c88925' }} /> 未到 {students.length - present} 人</span>
@@ -575,12 +655,23 @@ export function AttendancePage({ onNavigate }: AttendancePageProps) {
                       <article className={`attendance-card status-border-${status}`} key={student.id}>
                         <div className="attendance-card-head">
                           <div className="student-identity">
-                            <Avatar name={student.name} />
-                            <span><strong>{student.name}</strong><small>班级 {student.shortNo} · {student.studentNo || '未填写学号'}</small></span>
+                            <Avatar name={student.name} gender={student.gender} />
+                            <span>
+                              <div className="student-name-line">
+                                <strong>{student.name}</strong>
+                                <button className="inline-call-button compact" onClick={() => void callStudent(student)} aria-label={`拨打 ${student.name} 的电话`}><Phone size={14} /></button>
+                              </div>
+                              <small>短学号 {student.shortNo} · 学号 {student.studentNo || '未填写'}</small>
+                            </span>
                           </div>
-                          <button className={`note-button ${record?.note || record?.images.length ? 'has-note' : ''}`} onClick={() => openNote(student)}>
+                          <LongPressButton
+                            className={`note-button ${record?.note || record?.images.length ? 'has-note' : ''}`}
+                            onClick={() => openNote(student)}
+                            onLongPress={() => clearStudentNote(student)}
+                            title="长按可清空备注"
+                          >
                             <MessageSquareText size={15} /> {record?.note || record?.images.length ? '查看备注' : '添加备注'}
-                          </button>
+                          </LongPressButton>
                         </div>
                         <div className="status-button-row">
                           {statusConfig.map(({ key, icon: Icon }) => (
@@ -603,54 +694,6 @@ export function AttendancePage({ onNavigate }: AttendancePageProps) {
             </>
           )}
 
-          <section className="session-history-panel panel">
-            <header className="panel-header">
-              <div><span className="eyebrow">COMPLETED</span><h2>已完成点名</h2></div>
-              <span className="muted">{completedSessions.length} 个场次</span>
-            </header>
-            {completedSessions.length === 0 ? (
-              <div className="compact-empty">当天还没有已完成的点名场次</div>
-            ) : (
-              <div className="session-accordion-list">
-                {completedSessions.map((completed) => {
-                  const completedMap = new Map(completed.records.map((record) => [record.studentId, record]));
-                  const completedPresent = students.filter((student) => ['present', 'late'].includes(completedMap.get(student.id)?.status ?? '')).length;
-                  const completedLeave = students.filter((student) => completedMap.get(student.id)?.status === 'leave').length;
-                  const completedAbsent = students.filter((student) => completedMap.get(student.id)?.status === 'absent').length;
-                  return (
-                    <details className="session-accordion" key={completed.id}>
-                      <summary>
-                        <span className="session-accordion-dot" />
-                        <div><strong>{completed.title}</strong><small>{formatDateTime(completed.createdAt)} · {completed.records.length} 名学生</small></div>
-                        <div className="session-accordion-counts"><span className="present">实到 {completedPresent}</span><span className="leave">请假 {completedLeave}</span><span className="absent">缺勤 {completedAbsent}</span></div>
-                        <ChevronRight size={18} className="accordion-chevron" />
-                      </summary>
-                      <div className="session-accordion-body">
-                        <div className="accordion-export-row">
-                          <button className="text-button" onClick={() => void exportAttendance('csv', completed)}><Download size={15} /> 导出 CSV</button>
-                          <button className="text-button" onClick={() => void exportAttendance('html', completed)}><FileText size={15} /> 导出 HTML</button>
-                        </div>
-                        <div className="session-compact-list">
-                          {students.map((student) => {
-                            const record = completedMap.get(student.id);
-                            const status = record?.status ?? 'unmarked';
-                            return (
-                              <div className="session-compact-row" key={student.id}>
-                                <span className="short-no-badge">{student.shortNo}</span>
-                                <strong>{student.name}</strong>
-                                <span className={`status-dot status-${status}`}>{attendanceLabels[status]}</span>
-                                <span className="compact-note">{record?.note || '无备注'}{record?.images.length ? ` · ${record.images.length} 张图片` : ''}</span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </details>
-                  );
-                })}
-              </div>
-            )}
-          </section>
         </>
       )}
 
@@ -664,6 +707,90 @@ export function AttendancePage({ onNavigate }: AttendancePageProps) {
         <label className="field"><span>点名标题</span><input autoFocus value={newSessionTitle} onChange={(event) => setNewSessionTitle(event.target.value)} placeholder="例如：第一节课点名、晚点名、查寝" /></label>
         <div className="preset-list session-title-presets">
           {['第一节课点名', '第二节课点名', '晚点名', '查寝点名'].map((title) => <button key={title} className="preset-chip" onClick={() => setNewSessionTitle(title)}>{title}</button>)}
+        </div>
+      </Modal>
+
+      <Modal
+        open={historyOpen}
+        title="已完成点名"
+        description={`${formatDateChinese(date)} 的所有已完成场次，可查看或重新启动。`}
+        onClose={() => setHistoryOpen(false)}
+        width="lg"
+        footer={<button className="button button-secondary" onClick={() => setHistoryOpen(false)}>关闭</button>}
+      >
+        {completedSessions.length === 0 ? (
+          <div className="compact-empty">当天还没有已完成的点名场次</div>
+        ) : (
+          <div className="session-accordion-list">
+            {completedSessions.map((completed) => {
+              const completedMap = new Map(completed.records.map((record) => [record.studentId, record]));
+              const completedPresent = students.filter((student) => ['present', 'late'].includes(completedMap.get(student.id)?.status ?? '')).length;
+              const completedLeave = students.filter((student) => completedMap.get(student.id)?.status === 'leave').length;
+              const completedAbsent = students.filter((student) => completedMap.get(student.id)?.status === 'absent').length;
+              return (
+                <details className="session-accordion history-accordion" key={completed.id}>
+                  <summary>
+                    <span className="session-accordion-dot" />
+                    <div><strong>{completed.title}</strong><small>{formatDateTime(completed.createdAt)} · {completed.records.length} 名学生</small></div>
+                    <div className="session-accordion-counts"><span className="present">实到 {completedPresent}</span><span className="leave">请假 {completedLeave}</span><span className="absent">缺勤 {completedAbsent}</span></div>
+                    <ChevronRight size={18} className="accordion-chevron" />
+                  </summary>
+                  <div className="session-accordion-body">
+                    <div className="accordion-export-row">
+                      <button className="button button-soft" onClick={() => reopenCompletedSession(completed.id)}><RotateCcw size={15} /> 重新启动</button>
+                      <button className="text-button" onClick={() => void exportAttendance('csv', completed)}><Download size={15} /> 导出 CSV</button>
+                      <button className="text-button" onClick={() => void exportAttendance('html', completed)}><FileText size={15} /> 导出 HTML</button>
+                    </div>
+                    <div className="session-compact-list">
+                      {students.map((student) => {
+                        const record = completedMap.get(student.id);
+                        const status = record?.status ?? 'unmarked';
+                        return (
+                          <div className="session-compact-row" key={student.id}>
+                            <span className="short-no-badge">{student.shortNo}</span>
+                            <strong>{student.name}</strong>
+                            <span className={`status-dot status-${status}`}>{attendanceLabels[status]}</span>
+                            <span className="compact-note">{record?.note || '无备注'}{record?.images.length ? ` · ${record.images.length} 张图片` : ''}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </details>
+              );
+            })}
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={calendarOpen}
+        title="选择点名日期"
+        description="在日历中选择日期，然后查看或创建该日期的点名。"
+        onClose={() => setCalendarOpen(false)}
+        width="sm"
+        footer={<><button className="button button-secondary" onClick={() => setCalendarOpen(false)}>取消</button><button className="button button-primary" onClick={() => { setDate(isoDate()); setSelectedSessionId(''); setCalendarOpen(false); }}>回到今天</button></>}
+      >
+        <div className="calendar-panel">
+          <div className="calendar-head">
+            <button className="icon-button" onClick={() => setCalendarMonth((month) => shiftCalendarMonth(month, -1))} aria-label="上个月"><ChevronLeft size={18} /></button>
+            <strong>{calendarMonth.slice(0, 4)} 年 {Number(calendarMonth.slice(5, 7))} 月</strong>
+            <button className="icon-button" onClick={() => setCalendarMonth((month) => shiftCalendarMonth(month, 1))} aria-label="下个月"><ChevronRight size={18} /></button>
+          </div>
+          <div className="calendar-weekdays">{['日', '一', '二', '三', '四', '五', '六'].map((day) => <span key={day}>{day}</span>)}</div>
+          <div className="calendar-grid">
+            {getCalendarCells(calendarMonth).map((day, index) => day ? (
+              <button
+                key={`${calendarMonth}-${day}`}
+                className={`${`${calendarMonth}-${String(day).padStart(2, '0')}` === date ? 'selected' : ''} ${`${calendarMonth}-${String(day).padStart(2, '0')}` === isoDate() ? 'today' : ''}`}
+                onClick={() => {
+                  setDate(`${calendarMonth}-${String(day).padStart(2, '0')}`);
+                  setSelectedSessionId('');
+                  setCalendarOpen(false);
+                }}
+              >{day}</button>
+            ) : <span key={`empty-${index}`} />)}
+          </div>
         </div>
       </Modal>
 
@@ -700,24 +827,41 @@ export function AttendancePage({ onNavigate }: AttendancePageProps) {
       <Modal
         open={randomOpen}
         title="随机点名"
-        description="优先从未点名的学生中抽取。"
+        description="先选择抽取范围，再抽取学生并直接标记状态。"
         onClose={() => { setRandomOpen(false); setRandomStudent(null); }}
         width="sm"
-        footer={<><button className="button button-secondary" onClick={() => { setRandomOpen(false); setRandomStudent(null); }}>关闭</button><button className="button button-primary" disabled={!randomStudent} onClick={() => {
-          if (randomStudent && session) {
-            setAttendance(session.id, randomStudent.id, 'present');
-            showToast(`${randomStudent.name} 已标记为出勤`);
-            setRandomOpen(false);
-            setRandomStudent(null);
-          }
-        }}><Check size={17} /> 标记出勤</button></>}
+        footer={<button className="button button-secondary" onClick={() => { setRandomOpen(false); setRandomStudent(null); }}>关闭</button>}
       >
+        <div className="random-scope-options">
+          {([
+            ['unmarked', '未点名'],
+            ['marked', '已点名'],
+            ['all', '全部学生'],
+          ] as const).map(([key, label]) => (
+            <button key={key} className={randomScope === key ? 'active' : ''} onClick={() => { setRandomScope(key); setRandomStudent(null); }}>{label}<small>{key === 'unmarked' ? countByStatus('unmarked') : key === 'marked' ? students.length - countByStatus('unmarked') : students.length} 人</small></button>
+          ))}
+        </div>
         <div className="random-picker">
-          {randomStudent ? <><Avatar name={randomStudent.name} size="lg" /><h3>{randomStudent.name}</h3><p>班级 {randomStudent.shortNo} · {randomStudent.studentNo || '未填写学号'}</p></> : <><span className="random-placeholder"><Shuffle size={38} /></span><p>点击下方按钮抽取一名学生</p></>}
+          {randomStudent ? (
+            <>
+              <Avatar name={randomStudent.name} gender={randomStudent.gender} size="lg" />
+              <h3>{randomStudent.name}</h3>
+              <p>短学号 {randomStudent.shortNo} · 学号 {randomStudent.studentNo || '未填写'}</p>
+              <div className="random-status-actions">
+                {statusConfig.map(({ key, icon: Icon }) => (
+                  <button key={key} className={`flash-status choice-${key}`} onClick={() => markRandomStatus(key)}><Icon size={18} /><span>{attendanceLabels[key]}</span></button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <>
+              <span className="random-placeholder"><Shuffle size={38} /></span>
+              <p>当前范围有 {randomPool.length} 名学生</p>
+            </>
+          )}
           <button className="button button-soft" onClick={drawRandom}><Shuffle size={17} /> {randomStudent ? '再抽一次' : '开始抽取'}</button>
         </div>
       </Modal>
-
       <Modal
         open={Boolean(preview)}
         title={preview ? `${preview.studentName} · 点名图片` : '点名图片'}

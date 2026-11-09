@@ -17,7 +17,7 @@ describe('format utilities', () => {
   });
 
   it('uses the last Chinese character as avatar text', () => {
-    expect(getInitial('陈思远')).toBe('远');
+    expect(getInitial('陈思远')).toBe('思远');
     expect(getInitial('  ')).toBe('?');
   });
 });

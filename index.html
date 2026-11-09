@@ -12,6 +12,15 @@
     <link rel="apple-touch-icon" href="./icons/icon-192.png" />
     <link rel="manifest" href="./manifest.webmanifest" />
     <title>班务通 · 班级管理</title>
+    <script>
+      try {
+        const stored = JSON.parse(localStorage.getItem('banwutong-data-v1') || '{}');
+        const mode = stored?.state?.themeMode || 'system';
+        const dark = mode === 'dark' || (mode === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+        document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+      } catch {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

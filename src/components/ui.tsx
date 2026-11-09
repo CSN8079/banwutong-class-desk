@@ -2,6 +2,7 @@ import { useEffect, type ReactNode } from 'react';
 import { LoaderCircle, X } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { getInitial } from '../lib/format';
+import type { Gender } from '../types';
 
 interface ModalProps {
   open: boolean;
@@ -51,11 +52,11 @@ export function Modal({ open, title, description, children, footer, onClose, wid
   );
 }
 
-export function Avatar({ name, size = 'md', muted = false }: { name: string; size?: 'xs' | 'sm' | 'md' | 'lg'; muted?: boolean }) {
-  const palettes = [
-    'avatar-sage', 'avatar-sky', 'avatar-sand', 'avatar-rose',
-    'avatar-lavender', 'avatar-mint', 'avatar-clay', 'avatar-slate',
-  ];
+export function Avatar({ name, gender = 'other', size = 'md', muted = false }: { name: string; gender?: Gender; size?: 'xs' | 'sm' | 'md' | 'lg'; muted?: boolean }) {
+  const femalePalettes = ['avatar-rose', 'avatar-peach', 'avatar-clay', 'avatar-coral'];
+  const malePalettes = ['avatar-sky', 'avatar-blue', 'avatar-mint', 'avatar-indigo'];
+  const neutralPalettes = ['avatar-sage', 'avatar-lavender', 'avatar-slate', 'avatar-mint'];
+  const palettes = gender === 'female' ? femalePalettes : gender === 'male' ? malePalettes : neutralPalettes;
   const hash = Array.from(name).reduce((sum, char) => sum + char.charCodeAt(0), 0);
   return (
     <span className={`avatar avatar-${size} ${palettes[hash % palettes.length]} ${muted ? 'avatar-muted' : ''}`} aria-hidden="true">

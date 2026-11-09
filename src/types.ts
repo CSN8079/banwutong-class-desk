@@ -1,3 +1,5 @@
+export type ThemeMode = 'system' | 'light' | 'dark';
+
 export type PageKey =
   | 'dashboard'
   | 'students'
