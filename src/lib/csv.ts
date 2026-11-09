@@ -45,11 +45,13 @@ export function parseCsv(text: string): string[][] {
 }
 
 const aliases = {
+  shortNo: ['班级学号', '短学号', '班内学号', 'shortno', 'short_no'],
   studentNo: ['学号', 'studentno', 'student_no', 'number', '编号'],
   name: ['姓名', 'name', '学生姓名'],
   gender: ['性别', 'gender'],
   phone: ['手机', '手机号', '电话', 'phone'],
   dorm: ['宿舍', '寝室', 'dorm'],
+  bed: ['床位', '床号', 'bed'],
   note: ['备注', 'note'],
 };
 
@@ -62,11 +64,13 @@ export function parseStudentCsv(text: string) {
   if (rows.length === 0) return [];
   const headers = rows[0].map((item) => item.trim().toLowerCase());
   const indexes = {
+    shortNo: findColumn(headers, aliases.shortNo),
     studentNo: findColumn(headers, aliases.studentNo),
     name: findColumn(headers, aliases.name),
     gender: findColumn(headers, aliases.gender),
     phone: findColumn(headers, aliases.phone),
     dorm: findColumn(headers, aliases.dorm),
+    bed: findColumn(headers, aliases.bed),
     note: findColumn(headers, aliases.note),
   };
 
@@ -81,11 +85,13 @@ export function parseStudentCsv(text: string) {
         ? 'male'
         : 'other';
     return {
+      shortNo: indexes.shortNo >= 0 ? row[indexes.shortNo] ?? '' : '',
       studentNo: indexes.studentNo >= 0 ? row[indexes.studentNo] ?? '' : '',
       name: row[nameIndex] ?? '',
       gender: gender as 'male' | 'female' | 'other',
       phone: indexes.phone >= 0 ? row[indexes.phone] ?? '' : '',
       dorm: indexes.dorm >= 0 ? row[indexes.dorm] ?? '' : '',
+      bed: indexes.bed >= 0 ? row[indexes.bed] ?? '' : '',
       note: indexes.note >= 0 ? row[indexes.note] ?? '' : '',
     };
   }).filter((student) => student.name.trim().length > 0);

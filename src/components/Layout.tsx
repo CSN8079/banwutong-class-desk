@@ -90,7 +90,7 @@ export function Layout({
             <ShieldCheck size={18} />
             <span><strong>数据仅保存在本机</strong><small>不上传云端，保护学生隐私</small></span>
           </div>
-          <span className="version">班务通 v1.0.0</span>
+          <span className="version">班务通 v1.1.0</span>
         </div>
       </aside>
 

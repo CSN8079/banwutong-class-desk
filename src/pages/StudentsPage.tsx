@@ -3,6 +3,7 @@ import {
   Download,
   FileSpreadsheet,
   Pencil,
+  Phone,
   Plus,
   Search,
   Trash2,
@@ -10,20 +11,25 @@ import {
   UserRound,
   UsersRound,
 } from 'lucide-react';
+import { AppLauncher } from '@capacitor/app-launcher';
+import { Capacitor } from '@capacitor/core';
 import { useAppStore } from '../store/useAppStore';
 import { useToast } from '../components/toast-context';
 import { Avatar, EmptyState, Modal, PageHeading } from '../components/ui';
 import { buildStudentCsv } from '../lib/exports';
 import { parseStudentCsv } from '../lib/csv';
 import { saveFile } from '../lib/download';
+import { deleteImage } from '../lib/imageStore';
 import type { Gender, Student, StudentFormValues } from '../types';
 
 const emptyForm: StudentFormValues = {
+  shortNo: '',
   studentNo: '',
   name: '',
   gender: 'other',
   phone: '',
   dorm: '',
+  bed: '',
   note: '',
 };
 
@@ -44,6 +50,15 @@ function StudentForm({
         <input autoFocus value={value.name} onChange={(event) => set('name', event.target.value)} placeholder="请输入学生姓名" />
       </label>
       <label className="field">
+        <span>班级学号（短学号）</span>
+        <div className="inline-field">
+          <input value={value.shortNo} onChange={(event) => set('shortNo', event.target.value)} placeholder="留空则自动递增" />
+          <button type="button" className="mini-button" onClick={() => set('shortNo', value.studentNo.trim().slice(-4))} disabled={!value.studentNo.trim()}>
+            取学号末 4 位
+          </button>
+        </div>
+      </label>
+      <label className="field">
         <span>学号</span>
         <input value={value.studentNo} onChange={(event) => set('studentNo', event.target.value)} placeholder="例如 20230001" />
       </label>
@@ -57,11 +72,15 @@ function StudentForm({
       </label>
       <label className="field">
         <span>手机号</span>
-        <input value={value.phone} onChange={(event) => set('phone', event.target.value)} placeholder="选填" />
+        <input type="tel" value={value.phone} onChange={(event) => set('phone', event.target.value)} placeholder="选填，用于一键拨号" />
       </label>
       <label className="field">
         <span>宿舍</span>
         <input value={value.dorm} onChange={(event) => set('dorm', event.target.value)} placeholder="例如 梅园 3-201" />
+      </label>
+      <label className="field">
+        <span>床位</span>
+        <input value={value.bed} onChange={(event) => set('bed', event.target.value)} placeholder="例如 1 号床" />
       </label>
       <label className="field field-full">
         <span>备注</span>
@@ -75,6 +94,8 @@ export function StudentsPage() {
   const classes = useAppStore((state) => state.classes);
   const selectedClassId = useAppStore((state) => state.selectedClassId);
   const students = useAppStore((state) => state.students);
+  const sessions = useAppStore((state) => state.sessions);
+  const tasks = useAppStore((state) => state.tasks);
   const addStudent = useAppStore((state) => state.addStudent);
   const updateStudent = useAppStore((state) => state.updateStudent);
   const removeStudent = useAppStore((state) => state.removeStudent);
@@ -84,7 +105,7 @@ export function StudentsPage() {
   const currentStudents = useMemo(
     () => students
       .filter((student) => student.classId === selectedClassId)
-      .sort((a, b) => a.studentNo.localeCompare(b.studentNo, 'zh-CN', { numeric: true })),
+      .sort((a, b) => a.shortNo.localeCompare(b.shortNo, 'zh-CN', { numeric: true })),
     [students, selectedClassId],
   );
 
@@ -96,14 +117,17 @@ export function StudentsPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState('');
   const [importFileName, setImportFileName] = useState('');
+  const [shortNoFromStudentNo, setShortNoFromStudentNo] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
 
   const filtered = currentStudents.filter((student) => {
     const keyword = search.trim().toLowerCase();
     const matchesSearch = !keyword
       || student.name.toLowerCase().includes(keyword)
+      || student.shortNo.toLowerCase().includes(keyword)
       || student.studentNo.toLowerCase().includes(keyword)
-      || student.dorm.toLowerCase().includes(keyword);
+      || student.dorm.toLowerCase().includes(keyword)
+      || student.bed.toLowerCase().includes(keyword);
     const matchesGender = genderFilter === 'all' || student.gender === genderFilter;
     return matchesSearch && matchesGender;
   });
@@ -117,11 +141,13 @@ export function StudentsPage() {
   const openEdit = (student: Student) => {
     setEditing(student);
     setForm({
+      shortNo: student.shortNo,
       studentNo: student.studentNo,
       name: student.name,
       gender: student.gender,
       phone: student.phone,
       dorm: student.dorm,
+      bed: student.bed,
       note: student.note,
     });
     setFormOpen(true);
@@ -143,11 +169,36 @@ export function StudentsPage() {
     setFormOpen(false);
   };
 
-  const confirmDelete = (student: Student) => {
-    if (window.confirm(`确定从名单中删除「${student.name}」吗？相关点名和任务记录也会一并删除。`)) {
-      removeStudent(student.id);
-      showToast('已删除学生', 'info');
+  const callStudent = async (student: Student) => {
+    const phone = student.phone.replace(/[^\d+]/g, '');
+    if (phone.length < 7) {
+      showToast('该学生没有可拨打的手机号', 'error');
+      return;
     }
+    const url = `tel:${phone}`;
+    try {
+      if (Capacitor.isNativePlatform()) {
+        await AppLauncher.openUrl({ url });
+      } else {
+        window.location.href = url;
+      }
+    } catch {
+      showToast('无法打开系统拨号应用', 'error');
+    }
+  };
+
+  const confirmDelete = (student: Student) => {
+    if (!window.confirm(`确定从名单中删除「${student.name}」吗？相关点名和任务记录也会一并删除。`)) return;
+    sessions.forEach((session) => {
+      session.records.filter((record) => record.studentId === student.id)
+        .forEach((record) => record.images.forEach((image) => void deleteImage(image.id)));
+    });
+    tasks.forEach((task) => {
+      task.submissions.filter((submission) => submission.studentId === student.id)
+        .forEach((submission) => submission.attachments.forEach((attachment) => void deleteImage(attachment.id)));
+    });
+    removeStudent(student.id);
+    showToast('已删除学生', 'info');
   };
 
   const exportRoster = async () => {
@@ -169,8 +220,11 @@ export function StudentsPage() {
 
   const confirmImport = () => {
     try {
+      const hasShortNoColumn = /(班级学号|短学号|班内学号|shortno|short_no)/i.test(importText.split(/\r?\n/, 1)[0] ?? '');
       const rows = parseStudentCsv(importText);
-      const count = importStudents(rows);
+      const count = importStudents(rows, {
+        shortNoFromStudentNo: !hasShortNoColumn && shortNoFromStudentNo,
+      });
       if (count === 0) {
         showToast('没有导入新学生，请检查姓名列或重复学号', 'error');
         return;
@@ -179,6 +233,7 @@ export function StudentsPage() {
       setImportOpen(false);
       setImportText('');
       setImportFileName('');
+      setShortNoFromStudentNo(false);
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'CSV 解析失败', 'error');
     }
@@ -202,7 +257,7 @@ export function StudentsPage() {
       <section className="roster-toolbar panel">
         <div className="search-box">
           <Search size={18} />
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索姓名、学号或宿舍" />
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索姓名、班级学号、学号、宿舍或床位" />
           {search && <button onClick={() => setSearch('')}>清除</button>}
         </div>
         <div className="filter-pills">
@@ -224,22 +279,26 @@ export function StudentsPage() {
           />
         ) : (
           <>
-            <div className="roster-table-head">
-              <span>学生</span><span>学号</span><span>性别</span><span>联系方式</span><span>宿舍</span><span>备注</span><span />
+            <div className="roster-table-head roster-head-v2">
+              <span>学生</span><span>班级学号</span><span>学号</span><span>手机</span><span>宿舍 / 床位</span><span>备注</span><span>操作</span>
             </div>
             <div className="roster-table-body">
               {filtered.map((student, index) => (
-                <div className="roster-row" key={student.id}>
+                <div className="roster-row roster-row-v2" key={student.id}>
                   <div className="student-identity">
                     <Avatar name={student.name} />
-                    <span><strong>{student.name}</strong><small>第 {index + 1} 位</small></span>
+                    <span>
+                      <strong>{student.name}</strong>
+                      <small>{student.gender === 'male' ? '男' : student.gender === 'female' ? '女' : '未填写'} · 第 {index + 1} 位</small>
+                    </span>
                   </div>
+                  <span className="short-no-cell">{student.shortNo || '—'}</span>
                   <span className="mono-cell">{student.studentNo || '未填写'}</span>
-                  <span>{student.gender === 'male' ? '男' : student.gender === 'female' ? '女' : '—'}</span>
                   <span>{student.phone || '—'}</span>
-                  <span>{student.dorm || '—'}</span>
+                  <span>{student.dorm || '—'}{student.bed ? ` · ${student.bed}` : ''}</span>
                   <span className="note-cell">{student.note || '—'}</span>
                   <div className="row-actions">
+                    <button className="icon-button phone-action" onClick={() => void callStudent(student)} aria-label={`拨打 ${student.name} 的电话`} title="拨打电话"><Phone size={16} /></button>
                     <button className="icon-button" onClick={() => openEdit(student)} aria-label={`编辑 ${student.name}`}><Pencil size={16} /></button>
                     <button className="icon-button danger" onClick={() => confirmDelete(student)} aria-label={`删除 ${student.name}`}><Trash2 size={16} /></button>
                   </div>
@@ -253,7 +312,7 @@ export function StudentsPage() {
       <Modal
         open={formOpen}
         title={editing ? '编辑学生信息' : '添加学生'}
-        description={editing ? '修改后的信息会立即同步到点名和任务列表。' : `将学生加入「${classRoom?.name ?? '当前班级'}」。`}
+        description={editing ? '修改后的信息会立即同步到点名和任务列表。' : `将学生加入「${classRoom?.name ?? '当前班级'}」，短学号留空会自动递增。`}
         onClose={() => setFormOpen(false)}
         footer={(
           <>
@@ -270,7 +329,7 @@ export function StudentsPage() {
       <Modal
         open={importOpen}
         title="批量导入学生"
-        description="支持从 Excel 另存为 CSV 后导入。需包含“姓名”列，推荐同时提供学号、性别、手机、宿舍和备注列。"
+        description="支持从 Excel 另存为 CSV 后导入。需包含“姓名”列，推荐同时提供班级学号、学号、性别、手机、宿舍、床位和备注列。"
         onClose={() => setImportOpen(false)}
         footer={(
           <>
@@ -283,11 +342,15 @@ export function StudentsPage() {
           <input ref={importRef} type="file" accept=".csv,text/csv" hidden onChange={readImportFile} />
           <span className="import-icon"><Upload size={24} /></span>
           <strong>{importFileName || '选择 CSV 文件'}</strong>
-          <p>{importFileName ? '文件已读取，点击下方按钮开始导入' : '点击选择文件，重复学号会自动跳过'}</p>
+          <p>{importFileName ? '文件已读取，点击下方按钮开始导入' : '点击选择文件，重复长学号会自动跳过'}</p>
         </div>
+        <label className="check-line">
+          <input type="checkbox" checked={shortNoFromStudentNo} onChange={(event) => setShortNoFromStudentNo(event.target.checked)} />
+          <span>没有班级学号时，使用长学号末 4 位；否则按导入顺序自动递增</span>
+        </label>
         <div className="csv-hint">
           <UserRound size={17} />
-          <span>表头示例：学号, 姓名, 性别, 手机, 宿舍, 备注</span>
+          <span>表头示例：班级学号, 学号, 姓名, 性别, 手机, 宿舍, 床位, 备注</span>
         </div>
       </Modal>
     </div>

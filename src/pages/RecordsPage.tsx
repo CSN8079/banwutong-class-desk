@@ -45,7 +45,7 @@ export function RecordsPage({ onNavigate }: RecordsPageProps) {
 
   const visibleSessions = classSessions.filter((session) => {
     const matchesFilter = filter === 'all' || session.status === filter;
-    const matchesSearch = !search.trim() || session.date.includes(search.trim()) || session.topic.includes(search.trim());
+    const matchesSearch = !search.trim() || session.date.includes(search.trim()) || session.title.includes(search.trim());
     return matchesFilter && matchesSearch;
   });
 
@@ -67,7 +67,7 @@ export function RecordsPage({ onNavigate }: RecordsPageProps) {
         rows.push([
           session.date,
           classRoom?.name ?? '',
-          session.topic,
+          session.title,
           student.studentNo,
           student.name,
           attendanceLabels[record?.status ?? 'unmarked'],
@@ -85,7 +85,7 @@ export function RecordsPage({ onNavigate }: RecordsPageProps) {
 
   const exportSession = async (session: AttendanceSession) => {
     await saveFile(
-      `${classRoom?.name ?? '班级'}-${session.date}-${session.topic}.csv`,
+      `${classRoom?.name ?? '班级'}-${session.date}-${session.title}.csv`,
       buildAttendanceCsv(session, students, classRoom),
       'text/csv;charset=utf-8',
     );
@@ -142,7 +142,7 @@ export function RecordsPage({ onNavigate }: RecordsPageProps) {
                     <span>{session.date.slice(0, 7)}</span>
                   </div>
                   <div className="record-main">
-                    <div className="record-title-line"><strong>{session.topic}</strong><Tag tone={session.status === 'completed' ? 'green' : 'amber'}>{session.status === 'completed' ? '已完成' : '进行中'}</Tag></div>
+                    <div className="record-title-line"><strong>{session.title}</strong><Tag tone={session.status === 'completed' ? 'green' : 'amber'}>{session.status === 'completed' ? '已完成' : '进行中'}</Tag></div>
                     <span>{formatDateChinese(session.date)} · {session.records.length} 名学生的点名记录</span>
                   </div>
                   <div className="record-counts">
@@ -161,7 +161,7 @@ export function RecordsPage({ onNavigate }: RecordsPageProps) {
 
       <Modal
         open={Boolean(detail)}
-        title={detail ? `${formatDateChinese(detail.date)} · ${detail.topic}` : '点名详情'}
+        title={detail ? `${formatDateChinese(detail.date)} · ${detail.title}` : '点名详情'}
         description={detail ? `记录于 ${formatDateTime(detail.createdAt)} · ${detail.status === 'completed' ? '已完成归档' : '进行中'}` : ''}
         onClose={() => setDetail(null)}
         width="lg"
@@ -192,7 +192,7 @@ export function RecordsPage({ onNavigate }: RecordsPageProps) {
                 return (
                   <div className="record-detail-row" key={record.studentId}>
                     <Avatar name={student.name} size="sm" />
-                    <div className="record-detail-student"><strong>{student.name}</strong><span>{student.studentNo}</span></div>
+                    <div className="record-detail-student"><strong>{student.name}</strong><span>班级 {student.shortNo} · {student.studentNo}</span></div>
                     <span className={`status-dot status-${record.status}`}>{attendanceLabels[record.status]}</span>
                     <span className="record-detail-note">{record.note || '无备注'}</span>
                   </div>

@@ -1,5 +1,6 @@
 import { useEffect, type ReactNode } from 'react';
 import { LoaderCircle, X } from 'lucide-react';
+import { createPortal } from 'react-dom';
 import { getInitial } from '../lib/format';
 
 interface ModalProps {
@@ -28,7 +29,7 @@ export function Modal({ open, title, description, children, footer, onClose, wid
   }, [open, onClose]);
 
   if (!open) return null;
-  return (
+  return createPortal(
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget) onClose();
     }}>
@@ -45,7 +46,8 @@ export function Modal({ open, title, description, children, footer, onClose, wid
         <div className="modal-body">{children}</div>
         {footer && <footer className="modal-footer">{footer}</footer>}
       </section>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

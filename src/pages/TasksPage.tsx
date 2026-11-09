@@ -11,11 +11,13 @@ import {
 import {
   AlertCircle,
   CheckCircle2,
+  CheckSquare,
   ClipboardCheck,
   ClipboardList,
   Clock3,
   Download,
   FileImage,
+  FileSpreadsheet,
   FileText,
   ImagePlus,
   MoreHorizontal,
@@ -23,18 +25,19 @@ import {
   Plus,
   RotateCcw,
   Search,
+  Square,
   Trash2,
   UploadCloud,
   X,
 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 import { useToast } from '../components/toast-context';
-import { isoDate, addDays } from '../data/seed';
+import { addDays, isoDateTime } from '../data/seed';
 import { Avatar, EmptyState, LoadingButton, Modal, PageHeading, Tag } from '../components/ui';
-import { formatDateChinese, percent, relativeDue } from '../lib/format';
-import { buildTaskCsv, buildTaskHtmlReport } from '../lib/exports';
+import { formatDateTimeSeconds, percent, relativeDue } from '../lib/format';
+import { buildTaskCsv, buildTaskHtmlReport, buildTaskXlsx } from '../lib/exports';
 import { saveFile } from '../lib/download';
-import { compressImage, deleteImage, getImage, putImage } from '../lib/imageStore';
+import { blobToDataUrl, compressImage, deleteImage, getImage, putImage } from '../lib/imageStore';
 import { createId } from '../lib/id';
 import type { CollectionTask, Student, SubmissionStatus, TaskAttachment } from '../types';
 
@@ -44,24 +47,20 @@ interface AttachmentThumbProps {
 }
 
 function AttachmentThumb({ attachment, onOpen }: AttachmentThumbProps) {
-  const [url, setUrl] = useState<string | null>(null);
+  const [url, setUrl] = useState('');
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    let objectUrl = '';
     let active = true;
-    getImage(attachment.id).then((blob) => {
-      if (!active || !blob) {
+    getImage(attachment.id).then(async (blob) => {
+      if (!active) return;
+      if (!blob) {
         setFailed(true);
         return;
       }
-      objectUrl = URL.createObjectURL(blob);
-      setUrl(objectUrl);
+      setUrl(await blobToDataUrl(blob));
     }).catch(() => setFailed(true));
-    return () => {
-      active = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
+    return () => { active = false; };
   }, [attachment.id]);
 
   return (
@@ -80,17 +79,12 @@ function AttachmentThumb({ attachment, onOpen }: AttachmentThumbProps) {
 function PreviewImage({ attachment }: { attachment: TaskAttachment }) {
   const [url, setUrl] = useState('');
   useEffect(() => {
-    let objectUrl = '';
     let active = true;
-    getImage(attachment.id).then((blob) => {
+    getImage(attachment.id).then(async (blob) => {
       if (!active || !blob) return;
-      objectUrl = URL.createObjectURL(blob);
-      setUrl(objectUrl);
+      setUrl(await blobToDataUrl(blob));
     });
-    return () => {
-      active = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
+    return () => { active = false; };
   }, [attachment.id]);
 
   return url
@@ -100,6 +94,7 @@ function PreviewImage({ attachment }: { attachment: TaskAttachment }) {
 
 interface PreviewState {
   attachment: TaskAttachment;
+  studentId: string;
   studentName: string;
 }
 
@@ -113,7 +108,7 @@ function makeDefaultTaskForm(): TaskFormValues {
   return {
     title: '',
     description: '',
-    dueDate: isoDate(addDays(new Date(), 7)),
+    dueDate: isoDateTime(addDays(new Date(), 7)),
   };
 }
 
@@ -126,6 +121,7 @@ export function TasksPage() {
   const updateTask = useAppStore((state) => state.updateTask);
   const deleteTask = useAppStore((state) => state.deleteTask);
   const setSubmissionStatus = useAppStore((state) => state.setSubmissionStatus);
+  const setSubmissionStatusBulk = useAppStore((state) => state.setSubmissionStatusBulk);
   const setSubmissionNote = useAppStore((state) => state.setSubmissionNote);
   const addAttachment = useAppStore((state) => state.addAttachment);
   const removeAttachment = useAppStore((state) => state.removeAttachment);
@@ -134,7 +130,7 @@ export function TasksPage() {
   const students = useMemo(
     () => allStudents
       .filter((student) => student.classId === selectedClassId && student.active)
-      .sort((a, b) => a.studentNo.localeCompare(b.studentNo, 'zh-CN', { numeric: true })),
+      .sort((a, b) => a.shortNo.localeCompare(b.shortNo, 'zh-CN', { numeric: true })),
     [allStudents, selectedClassId],
   );
   const classTasks = useMemo(
@@ -151,8 +147,9 @@ export function TasksPage() {
   const [editingTask, setEditingTask] = useState<CollectionTask | null>(null);
   const [taskForm, setTaskForm] = useState<TaskFormValues>(makeDefaultTaskForm);
   const [uploadingStudentId, setUploadingStudentId] = useState('');
+  const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
   const [preview, setPreview] = useState<PreviewState | null>(null);
-  const [exporting, setExporting] = useState(false);
+  const [exporting, setExporting] = useState<'' | 'html' | 'xlsx'>('');
   const [moreOpen, setMoreOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadTargetRef = useRef('');
@@ -180,6 +177,7 @@ export function TasksPage() {
     const keyword = search.trim().toLowerCase();
     const matchesSearch = !keyword
       || student.name.toLowerCase().includes(keyword)
+      || student.shortNo.includes(keyword)
       || student.studentNo.includes(keyword)
       || (submission?.note ?? '').toLowerCase().includes(keyword);
     const matchesFilter = filter === 'all'
@@ -311,10 +309,35 @@ export function TasksPage() {
     showToast('附件已删除', 'info');
   };
 
+  const toggleStudentSelection = (studentId: string) => {
+    setSelectedStudentIds((current) => current.includes(studentId)
+      ? current.filter((id) => id !== studentId)
+      : [...current, studentId]);
+  };
+
+  const allVisibleSelected = visibleStudents.length > 0
+    && visibleStudents.every((student) => selectedStudentIds.includes(student.id));
+
+  const toggleSelectVisible = () => {
+    if (allVisibleSelected) {
+      const visibleIds = new Set(visibleStudents.map((student) => student.id));
+      setSelectedStudentIds((current) => current.filter((id) => !visibleIds.has(id)));
+    } else {
+      setSelectedStudentIds((current) => Array.from(new Set([...current, ...visibleStudents.map((student) => student.id)])));
+    }
+  };
+
+  const applyBulkStatus = (status: SubmissionStatus) => {
+    if (!selectedTask || selectedStudentIds.length === 0) return;
+    setSubmissionStatusBulk(selectedTask.id, selectedStudentIds, status);
+    showToast(`已将 ${selectedStudentIds.length} 名学生批量标记为${status === 'completed' ? '已完成' : status === 'pending' ? '待检查' : '未完成'}`);
+    setSelectedStudentIds([]);
+  };
+
   const exportCsv = async () => {
     if (!selectedTask) return;
     await saveFile(
-      `${selectedTask.title}-提交清单-${selectedTask.dueDate}.csv`,
+      `${selectedTask.title}-提交清单-${selectedTask.dueDate.replaceAll(':', '-')}.csv`,
       buildTaskCsv(selectedTask, students),
       'text/csv;charset=utf-8',
     );
@@ -324,7 +347,7 @@ export function TasksPage() {
 
   const exportHtml = async () => {
     if (!selectedTask) return;
-    setExporting(true);
+    setExporting('html');
     try {
       const html = await buildTaskHtmlReport(selectedTask, students, classRoom);
       await saveFile(`${selectedTask.title}-图文报告.html`, html, 'text/html;charset=utf-8');
@@ -333,7 +356,21 @@ export function TasksPage() {
     } catch {
       showToast('报告生成失败，请重试', 'error');
     } finally {
-      setExporting(false);
+      setExporting('');
+    }
+  };
+
+  const exportXlsx = async () => {
+    if (!selectedTask) return;
+    setExporting('xlsx');
+    try {
+      const blob = await buildTaskXlsx(selectedTask, students, classRoom);
+      await saveFile(`${selectedTask.title}-提交清单-${selectedTask.dueDate.replaceAll(':', '-')}.xlsx`, blob, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      showToast('XLSX 提交清单已生成');
+    } catch {
+      showToast('XLSX 生成失败，请重试', 'error');
+    } finally {
+      setExporting('');
     }
   };
 
@@ -345,7 +382,17 @@ export function TasksPage() {
     }
   };
 
+  const deletePreview = async () => {
+    if (!preview || !selectedTask) return;
+    if (!window.confirm(`删除「${preview.studentName}」的附件「${preview.attachment.name}」吗？`)) return;
+    await deleteImage(preview.attachment.id);
+    removeAttachment(selectedTask.id, preview.studentId, preview.attachment.id);
+    setPreview(null);
+    showToast('附件已删除', 'info');
+  };
+
   const filterCount = (key: typeof filter) => {
+
     if (key === 'all') return students.length;
     if (key === 'incomplete') return students.filter((student) => submissionMap.get(student.id)?.status !== 'completed').length;
     return students.filter((student) => (submissionMap.get(student.id)?.status ?? 'pending') === key).length;
@@ -394,12 +441,13 @@ export function TasksPage() {
               {classTasks.map((task) => {
                 const total = students.length;
                 const taskCompleted = task.submissions.filter((submission) => submission.status === 'completed').length;
+                const taskOutstanding = task.submissions.filter((submission) => submission.status !== 'completed').length;
                 const due = relativeDue(task.dueDate);
                 return (
                   <button
                     key={task.id}
                     className={`task-list-item ${task.id === effectiveTaskId ? 'active' : ''}`}
-                    onClick={() => { setSelectedTaskId(task.id); setSearch(''); setFilter('all'); setMoreOpen(false); }}
+                    onClick={() => { setSelectedTaskId(task.id); setSearch(''); setFilter('all'); setMoreOpen(false); setSelectedStudentIds([]); }}
                   >
                     <div className="task-list-top">
                       <span className={`task-state-dot ${task.status}`} />
@@ -408,6 +456,7 @@ export function TasksPage() {
                     <div className="task-list-progress"><span style={{ width: `${percent(taskCompleted, total)}%` }} /></div>
                     <div className="task-list-meta">
                       <span>{taskCompleted}/{total} 已交</span>
+                      <span className={taskOutstanding > 0 ? 'danger-text' : 'muted'}>{taskOutstanding} 人未交</span>
                       <span className={due.tone}>{task.status === 'closed' ? '已结束' : due.text}</span>
                     </div>
                   </button>
@@ -426,13 +475,16 @@ export function TasksPage() {
                   </div>
                   <p>{selectedTask.description || '暂无任务说明'}</p>
                   <span className={`task-due ${relativeDue(selectedTask.dueDate).tone}`}>
-                    <Clock3 size={15} /> {formatDateChinese(selectedTask.dueDate)} · {relativeDue(selectedTask.dueDate).text}
+                    <Clock3 size={15} /> {formatDateTimeSeconds(selectedTask.dueDate)} · {relativeDue(selectedTask.dueDate).text}
                   </span>
                 </div>
                 <div className="task-head-actions">
                   <button className="button button-secondary" onClick={exportCsv}><Download size={16} /> CSV</button>
-                  <button className="button button-secondary" onClick={exportHtml} disabled={exporting}>
-                    <LoadingButton loading={exporting}><FileText size={16} /> 图文报告</LoadingButton>
+                  <button className="button button-secondary" onClick={exportXlsx} disabled={exporting === 'xlsx'}>
+                    <LoadingButton loading={exporting === 'xlsx'}><FileSpreadsheet size={16} /> XLSX</LoadingButton>
+                  </button>
+                  <button className="button button-secondary" onClick={exportHtml} disabled={exporting === 'html'}>
+                    <LoadingButton loading={exporting === 'html'}><FileText size={16} /> 图文报告</LoadingButton>
                   </button>
                   <div className="more-menu-wrap">
                     <button className="icon-button more-button" onClick={() => setMoreOpen((open) => !open)} aria-label="更多任务操作"><MoreHorizontal size={19} /></button>
@@ -462,14 +514,14 @@ export function TasksPage() {
                     ['pending', '待检查'],
                     ['missing', '缺交'],
                   ] as const).map(([key, label]) => (
-                    <button key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}>
+                    <button key={key} className={filter === key ? 'active' : ''} onClick={() => { setFilter(key); setSelectedStudentIds([]); }}>
                       {label} {filterCount(key)}
                     </button>
                   ))}
                 </div>
                 <div className="search-box compact">
                   <Search size={17} />
-                  <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索学生或备注" />
+                  <input value={search} onChange={(event) => { setSearch(event.target.value); setSelectedStudentIds([]); }} placeholder="搜索姓名、短学号或备注" />
                   {search && <button onClick={() => setSearch('')}><X size={14} /></button>}
                 </div>
               </div>
@@ -480,6 +532,19 @@ export function TasksPage() {
               </div>
 
               <input ref={fileInputRef} type="file" accept="image/*" multiple hidden onChange={handleFileChange} />
+
+              <div className="bulk-toolbar">
+                <button className="bulk-select-all" onClick={toggleSelectVisible}>
+                  {allVisibleSelected ? <CheckSquare size={17} /> : <Square size={17} />}
+                  {allVisibleSelected ? '取消全选' : '全选当前列表'}
+                </button>
+                <span className="bulk-selected-count">已选 {selectedStudentIds.length} 人</span>
+                <div className="bulk-actions">
+                  <button disabled={selectedStudentIds.length === 0} onClick={() => applyBulkStatus('completed')}><CheckCircle2 size={15} /> 标为已完成</button>
+                  <button disabled={selectedStudentIds.length === 0} onClick={() => applyBulkStatus('pending')}><Clock3 size={15} /> 标为待检查</button>
+                  <button disabled={selectedStudentIds.length === 0} onClick={() => applyBulkStatus('missing')}><AlertCircle size={15} /> 标为未完成</button>
+                </div>
+              </div>
 
               {visibleStudents.length === 0 ? (
                 <EmptyState
@@ -503,9 +568,12 @@ export function TasksPage() {
                         onDragLeave={(event) => event.currentTarget.classList.remove('drag-active')}
                         onDrop={(event) => handleDrop(event, student)}
                       >
+                        <button className="selection-check" onClick={() => toggleStudentSelection(student.id)} aria-label={`选择 ${student.name}`}>
+                          {selectedStudentIds.includes(student.id) ? <CheckSquare size={19} /> : <Square size={19} />}
+                        </button>
                         <div className="submission-student">
                           <Avatar name={student.name} />
-                          <span><strong>{student.name}</strong><small>{student.studentNo || '未填写学号'}</small></span>
+                          <span><strong>{student.name}</strong><small>班级 {student.shortNo} · {student.studentNo || '未填写学号'}</small></span>
                         </div>
                         <div className="submission-statuses">
                           {statusButton(student, 'completed', '已完成', CheckCircle2)}
@@ -524,7 +592,7 @@ export function TasksPage() {
                             <span className="attachment-wrap" key={attachment.id}>
                               <AttachmentThumb
                                 attachment={attachment}
-                                onOpen={() => setPreview({ attachment, studentName: student.name })}
+                                onOpen={() => setPreview({ attachment, studentId: student.id, studentName: student.name })}
                               />
                               <button className="attachment-remove" aria-label="删除附件" onClick={() => void removeStudentAttachment(student, attachment)}><X size={11} /></button>
                             </span>
@@ -533,6 +601,7 @@ export function TasksPage() {
                             {uploadingStudentId === student.id ? <span className="thumb-loading" /> : <ImagePlus size={18} />}
                             <span>{submission?.attachments.length ? '继续添加' : '上传截图'}</span>
                           </button>
+                          {submission?.attachments.length ? <span className="attachment-count">{submission.attachments.length} 张附件</span> : null}
                         </div>
                       </article>
                     );
@@ -572,8 +641,8 @@ export function TasksPage() {
               <textarea rows={4} value={taskForm.description} onChange={(event) => setTaskForm({ ...taskForm, description: event.target.value })} placeholder="说明提交内容、格式或检查要求" />
             </label>
             <label className="field">
-              <span>截止日期</span>
-              <input type="date" value={taskForm.dueDate} onChange={(event) => setTaskForm({ ...taskForm, dueDate: event.target.value })} />
+              <span>截止日期与时间</span>
+              <input type="datetime-local" step="1" value={taskForm.dueDate} onChange={(event) => setTaskForm({ ...taskForm, dueDate: event.target.value })} />
             </label>
           </div>
           <div className="form-help"><UploadCloud size={17} /> 创建后可在每个学生行上传照片、文件截图，或直接粘贴剪贴板截图。</div>
@@ -589,6 +658,7 @@ export function TasksPage() {
         footer={(
           <>
             <button className="button button-secondary" onClick={() => setPreview(null)}>关闭</button>
+            <button className="button button-danger" onClick={() => void deletePreview()}><Trash2 size={16} /> 删除图片</button>
             <button className="button button-primary" onClick={downloadPreview}><Download size={16} /> 保存图片</button>
           </>
         )}

@@ -36,6 +36,11 @@ describe('CSV utilities', () => {
     });
   });
 
+  it('maps short number and bed columns', () => {
+    const rows = parseStudentCsv('班级学号,学号,姓名,宿舍,床位\n01,20230001,张三,梅园 3-201,2 号床');
+    expect(rows[0]).toMatchObject({ shortNo: '01', bed: '2 号床' });
+  });
+
   it('rejects CSV without a name column', () => {
     expect(() => parseStudentCsv('学号,手机\n20230001,13800000000')).toThrow('姓名');
   });

@@ -49,6 +49,8 @@ ipcMain.handle('save-file', async (_event, payload) => {
   const extension = path.extname(payload.filename).toLowerCase();
   const filters = extension === '.csv'
     ? [{ name: 'CSV 表格', extensions: ['csv'] }]
+    : extension === '.xlsx'
+      ? [{ name: 'Excel 工作簿', extensions: ['xlsx'] }]
     : extension === '.html'
       ? [{ name: 'HTML 报告', extensions: ['html'] }]
       : extension === '.json'

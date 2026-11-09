@@ -29,7 +29,10 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
   const classRoom = classes.find((item) => item.id === selectedClassId);
   const students = allStudents.filter((student) => student.classId === selectedClassId && student.active);
   const today = isoDate();
-  const todaySession = sessions.find((session) => session.classId === selectedClassId && session.date === today);
+  const todaySessions = sessions
+    .filter((session) => session.classId === selectedClassId && session.date === today)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const todaySession = todaySessions.find((session) => session.status === 'active') ?? todaySessions[0];
   const recordMap = new Map(todaySession?.records.map((record) => [record.studentId, record]) ?? []);
   const marked = students.filter((student) => (recordMap.get(student.id)?.status ?? 'unmarked') !== 'unmarked').length;
   const present = students.filter((student) => ['present', 'late'].includes(recordMap.get(student.id)?.status ?? '')).length;
@@ -43,7 +46,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
   }, 0);
   const recentSessions = sessions
     .filter((session) => session.classId === selectedClassId)
-    .sort((a, b) => b.date.localeCompare(a.date))
+    .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt))
     .slice(0, 3);
 
   const [greeting] = useState(() => {
@@ -82,26 +85,26 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
       </section>
 
       <section className="metric-grid">
-        <article className="metric-card">
+        <button className="metric-card" onClick={() => onNavigate('students')}>
           <div className="metric-icon metric-icon-green"><UsersRound size={20} /></div>
           <div><span>在册学生</span><strong>{students.length}<small> 人</small></strong></div>
-          <span className="metric-note">{classRoom?.grade ?? '当前班级'}</span>
-        </article>
-        <article className="metric-card">
+          <span className="metric-note">{classRoom?.grade ?? '当前班级'} · 点击查看名单</span>
+        </button>
+        <button className="metric-card" onClick={() => onNavigate('attendance')}>
           <div className="metric-icon metric-icon-blue"><UserCheck size={20} /></div>
           <div><span>今日已点名</span><strong>{marked}<small> / {students.length}</small></strong></div>
-          <span className="metric-note">{marked === students.length ? '点名已完成' : `还剩 ${students.length - marked} 人`}</span>
-        </article>
-        <article className="metric-card">
+          <span className="metric-note">{marked === students.length ? '点名已完成' : `还剩 ${students.length - marked} 人`} · 点击去点名</span>
+        </button>
+        <button className="metric-card" onClick={() => onNavigate('attendance')}>
           <div className="metric-icon metric-icon-amber"><Clock3 size={20} /></div>
           <div><span>需关注</span><strong>{attention.length}<small> 人</small></strong></div>
-          <span className="metric-note">迟到 / 请假 / 缺勤</span>
-        </article>
-        <article className="metric-card">
+          <span className="metric-note">迟到 / 请假 / 缺勤 · 点击查看</span>
+        </button>
+        <button className="metric-card" onClick={() => onNavigate('tasks')}>
           <div className="metric-icon metric-icon-rose"><ClipboardList size={20} /></div>
           <div><span>任务待收</span><strong>{totalMissing}<small> 份</small></strong></div>
-          <span className="metric-note">{activeTasks.length} 个进行中任务</span>
-        </article>
+          <span className="metric-note">{activeTasks.length} 个进行中任务 · 点击查看</span>
+        </button>
       </section>
 
       <section className="dashboard-grid">
@@ -212,7 +215,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
                 <button key={session.id} className="recent-session" onClick={() => onNavigate('records')}>
                   <span className="date-tile"><strong>{Number(session.date.slice(8, 10))}</strong><small>{formatDateChinese(session.date)}</small></span>
                   <span className="recent-session-copy">
-                    <strong>{session.topic}</strong>
+                    <strong>{session.title}</strong>
                     <small>{recorded} 人已点名 · {absent} 人请假/缺勤</small>
                   </span>
                   <span className={`session-state ${session.status}`}>{session.status === 'completed' ? '已完成' : '进行中'}</span>

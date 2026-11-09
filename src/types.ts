@@ -21,11 +21,13 @@ export type Gender = 'male' | 'female' | 'other';
 export interface Student {
   id: string;
   classId: string;
+  shortNo: string;
   studentNo: string;
   name: string;
   gender: Gender;
   phone: string;
   dorm: string;
+  bed: string;
   note: string;
   active: boolean;
   createdAt: string;
@@ -37,6 +39,7 @@ export interface AttendanceRecord {
   studentId: string;
   status: AttendanceStatus;
   note: string;
+  images: TaskAttachment[];
   updatedAt: string;
 }
 
@@ -44,7 +47,7 @@ export interface AttendanceSession {
   id: string;
   classId: string;
   date: string;
-  topic: string;
+  title: string;
   records: AttendanceRecord[];
   status: 'active' | 'completed';
   createdAt: string;
@@ -100,11 +103,13 @@ export interface BackupData {
 }
 
 export interface StudentFormValues {
+  shortNo: string;
   studentNo: string;
   name: string;
   gender: Gender;
   phone: string;
   dorm: string;
+  bed: string;
   note: string;
 }
 
@@ -116,4 +121,6 @@ export interface ClassFormValues {
   color: string;
 }
 
-
+export interface ImportStudentsOptions {
+  shortNoFromStudentNo?: boolean;
+}
