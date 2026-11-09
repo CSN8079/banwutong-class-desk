@@ -191,8 +191,8 @@ export function RecordsPage({ onNavigate }: RecordsPageProps) {
                 if (!student) return null;
                 return (
                   <div className="record-detail-row" key={record.studentId}>
-                    <Avatar name={student.name} size="sm" />
-                    <div className="record-detail-student"><strong>{student.name}</strong><span>班级 {student.shortNo} · {student.studentNo}</span></div>
+                    <Avatar name={student.name} gender={student.gender} size="sm" />
+                    <div className="record-detail-student"><strong>{student.name}</strong><span>短学号 {student.shortNo} · 学号 {student.studentNo}</span></div>
                     <span className={`status-dot status-${record.status}`}>{attendanceLabels[record.status]}</span>
                     <span className="record-detail-note">{record.note || '无备注'}</span>
                   </div>

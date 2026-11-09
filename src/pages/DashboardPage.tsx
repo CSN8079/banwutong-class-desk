@@ -77,7 +77,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
             <span>今日出勤</span>
             <strong>{percent(present, students.length)}<small>%</small></strong>
             <div className="hero-avatars">
-              {students.slice(0, 4).map((student) => <Avatar key={student.id} name={student.name} size="sm" />)}
+              {students.slice(0, 4).map((student) => <Avatar key={student.id} name={student.name} gender={student.gender} size="sm" />)}
               {students.length > 4 && <span className="avatar-more">+{students.length - 4}</span>}
             </div>
           </div>
@@ -150,7 +150,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
               <div className="attention-list">
                 {attention.map(({ student, record }) => (
                   <div className="attention-item" key={student.id}>
-                    <Avatar name={student.name} size="sm" />
+                    <Avatar name={student.name} gender={student.gender} size="sm" />
                     <div>
                       <strong>{student.name}</strong>
                       <span>{record?.note || attendanceLabels[record?.status ?? 'unmarked']}</span>

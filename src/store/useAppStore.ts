@@ -16,6 +16,7 @@ import type {
   StudentFormValues,
   SubmissionStatus,
   TaskAttachment,
+  ThemeMode,
 } from '../types';
 
 interface AppStore {
@@ -25,8 +26,10 @@ interface AppStore {
   tasks: CollectionTask[];
   presets: RemarkPreset[];
   selectedClassId: string;
+  themeMode: ThemeMode;
 
   setSelectedClass: (classId: string) => void;
+  setThemeMode: (mode: ThemeMode) => void;
   addClass: (values: ClassFormValues) => ClassRoom;
   updateClass: (id: string, values: ClassFormValues) => void;
   deleteClass: (id: string) => void;
@@ -42,6 +45,7 @@ interface AppStore {
   addAttendanceAttachment: (sessionId: string, studentId: string, attachment: TaskAttachment) => void;
   removeAttendanceAttachment: (sessionId: string, studentId: string, attachmentId: string) => void;
   completeSession: (sessionId: string) => void;
+  reopenSession: (sessionId: string) => void;
 
   addTask: (input: { title: string; description: string; dueDate: string }) => CollectionTask;
   updateTask: (id: string, patch: Partial<Pick<CollectionTask, 'title' | 'description' | 'dueDate' | 'status'>>) => void;
@@ -168,8 +172,10 @@ export const useAppStore = create<AppStore>()(
       tasks: seed.tasks,
       presets: seed.presets,
       selectedClassId: seed.selectedClassId,
+      themeMode: 'system',
 
       setSelectedClass: (classId) => set({ selectedClassId: classId }),
+      setThemeMode: (mode) => set({ themeMode: mode }),
 
       addClass: (values) => {
         const newClass: ClassRoom = {
@@ -382,6 +388,12 @@ export const useAppStore = create<AppStore>()(
           : session),
       })),
 
+      reopenSession: (sessionId) => set((state) => ({
+        sessions: state.sessions.map((session) => session.id === sessionId
+          ? { ...session, status: 'active', completedAt: undefined }
+          : session),
+      })),
+
       addTask: (input) => {
         const { selectedClassId, students } = get();
         const task: CollectionTask = {
@@ -476,6 +488,7 @@ export const useAppStore = create<AppStore>()(
         tasks: normalizeTasks(data.tasks),
         presets: data.presets,
         selectedClassId: data.classes[0]?.id ?? '',
+        themeMode: get().themeMode,
       }),
 
       clearBusinessData: () => set((state) => ({
@@ -499,7 +512,7 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'banwutong-data-v1',
-      version: 2,
+      version: 3,
       migrate: (persistedState) => {
         const state = persistedState as Partial<AppStore> & {
           students?: LegacyStudent[];
@@ -511,6 +524,7 @@ export const useAppStore = create<AppStore>()(
           students: normalizeStudents(state.students ?? []),
           sessions: normalizeSessions(state.sessions ?? []),
           tasks: normalizeTasks(state.tasks ?? []),
+          themeMode: state.themeMode ?? 'system',
         } as AppStore;
       },
       partialize: (state) => ({
@@ -520,6 +534,7 @@ export const useAppStore = create<AppStore>()(
         tasks: state.tasks,
         presets: state.presets,
         selectedClassId: state.selectedClassId,
+        themeMode: state.themeMode,
       }),
     },
   ),

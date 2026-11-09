@@ -63,7 +63,8 @@ export function relativeDue(date: string): { text: string; tone: 'normal' | 'soo
 }
 
 export function getInitial(name: string): string {
-  return name.trim().slice(-1) || '?';
+  const characters = Array.from(name.trim());
+  return characters.slice(-2).join('') || '?';
 }
 
 export function percent(part: number, total: number): number {

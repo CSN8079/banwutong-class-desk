@@ -7,12 +7,15 @@ import {
   FileJson,
   HardDrive,
   Info,
+  Monitor,
+  Moon,
   Pencil,
   Plus,
   RefreshCcw,
   ShieldCheck,
   Smartphone,
   Sparkles,
+  Sun,
   Trash2,
   Upload,
   UsersRound,
@@ -59,6 +62,8 @@ export function SettingsPage() {
   const students = useAppStore((state) => state.students);
   const tasks = useAppStore((state) => state.tasks);
   const sessions = useAppStore((state) => state.sessions);
+  const themeMode = useAppStore((state) => state.themeMode);
+  const setThemeMode = useAppStore((state) => state.setThemeMode);
   const presets = useAppStore((state) => state.presets);
   const addClass = useAppStore((state) => state.addClass);
   const updateClass = useAppStore((state) => state.updateClass);
@@ -379,6 +384,17 @@ export function SettingsPage() {
         </section>
 
         <aside className="settings-side">
+          <article className="panel theme-settings-card">
+            <span className="eyebrow">APPEARANCE</span>
+            <h2>外观模式</h2>
+            <p>可以跟随系统，也可以手动固定为浅色或深色。</p>
+            <div className="theme-options">
+              <button className={themeMode === 'system' ? 'active' : ''} onClick={() => setThemeMode('system')}><Monitor size={18} /><span>跟随系统</span></button>
+              <button className={themeMode === 'light' ? 'active' : ''} onClick={() => setThemeMode('light')}><Sun size={18} /><span>浅色</span></button>
+              <button className={themeMode === 'dark' ? 'active' : ''} onClick={() => setThemeMode('dark')}><Moon size={18} /><span>深色</span></button>
+            </div>
+          </article>
+
           <article className="panel privacy-card-large">
             <span className="privacy-illustration"><ShieldCheck size={30} /></span>
             <span className="eyebrow">PRIVACY FIRST</span>
@@ -402,7 +418,7 @@ export function SettingsPage() {
 
           <article className="about-card">
             <strong>班务通 Class Desk</strong>
-            <span>版本 1.1.0 · 本地优先</span>
+            <span>版本 1.2.0 · 本地优先</span>
             <small>专注班级点名、备注和材料收集</small>
           </article>
         </aside>

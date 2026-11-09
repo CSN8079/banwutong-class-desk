@@ -11,14 +11,13 @@ import {
   UserRound,
   UsersRound,
 } from 'lucide-react';
-import { AppLauncher } from '@capacitor/app-launcher';
-import { Capacitor } from '@capacitor/core';
 import { useAppStore } from '../store/useAppStore';
 import { useToast } from '../components/toast-context';
 import { Avatar, EmptyState, Modal, PageHeading } from '../components/ui';
 import { buildStudentCsv } from '../lib/exports';
 import { parseStudentCsv } from '../lib/csv';
 import { saveFile } from '../lib/download';
+import { callPhoneNumber } from '../lib/call';
 import { deleteImage } from '../lib/imageStore';
 import type { Gender, Student, StudentFormValues } from '../types';
 
@@ -50,7 +49,7 @@ function StudentForm({
         <input autoFocus value={value.name} onChange={(event) => set('name', event.target.value)} placeholder="请输入学生姓名" />
       </label>
       <label className="field">
-        <span>班级学号（短学号）</span>
+        <span>短学号（班内学号）</span>
         <div className="inline-field">
           <input value={value.shortNo} onChange={(event) => set('shortNo', event.target.value)} placeholder="留空则自动递增" />
           <button type="button" className="mini-button" onClick={() => set('shortNo', value.studentNo.trim().slice(-4))} disabled={!value.studentNo.trim()}>
@@ -170,20 +169,10 @@ export function StudentsPage() {
   };
 
   const callStudent = async (student: Student) => {
-    const phone = student.phone.replace(/[^\d+]/g, '');
-    if (phone.length < 7) {
-      showToast('该学生没有可拨打的手机号', 'error');
-      return;
-    }
-    const url = `tel:${phone}`;
     try {
-      if (Capacitor.isNativePlatform()) {
-        await AppLauncher.openUrl({ url });
-      } else {
-        window.location.href = url;
-      }
-    } catch {
-      showToast('无法打开系统拨号应用', 'error');
+      await callPhoneNumber(student.phone);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '无法打开系统拨号应用', 'error');
     }
   };
 
@@ -220,7 +209,7 @@ export function StudentsPage() {
 
   const confirmImport = () => {
     try {
-      const hasShortNoColumn = /(班级学号|短学号|班内学号|shortno|short_no)/i.test(importText.split(/\r?\n/, 1)[0] ?? '');
+      const hasShortNoColumn = /(短学号|班内学号|shortno|short_no)/i.test(importText.split(/\r?\n/, 1)[0] ?? '');
       const rows = parseStudentCsv(importText);
       const count = importStudents(rows, {
         shortNoFromStudentNo: !hasShortNoColumn && shortNoFromStudentNo,
@@ -257,7 +246,7 @@ export function StudentsPage() {
       <section className="roster-toolbar panel">
         <div className="search-box">
           <Search size={18} />
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索姓名、班级学号、学号、宿舍或床位" />
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索姓名、短学号、学号、宿舍或床位" />
           {search && <button onClick={() => setSearch('')}>清除</button>}
         </div>
         <div className="filter-pills">
@@ -280,13 +269,13 @@ export function StudentsPage() {
         ) : (
           <>
             <div className="roster-table-head roster-head-v2">
-              <span>学生</span><span>班级学号</span><span>学号</span><span>手机</span><span>宿舍 / 床位</span><span>备注</span><span>操作</span>
+              <span>学生</span><span>短学号</span><span>学号</span><span>手机</span><span>宿舍 / 床位</span><span>备注</span><span>操作</span>
             </div>
             <div className="roster-table-body">
               {filtered.map((student, index) => (
                 <div className="roster-row roster-row-v2" key={student.id}>
                   <div className="student-identity">
-                    <Avatar name={student.name} />
+                    <Avatar name={student.name} gender={student.gender} />
                     <span>
                       <strong>{student.name}</strong>
                       <small>{student.gender === 'male' ? '男' : student.gender === 'female' ? '女' : '未填写'} · 第 {index + 1} 位</small>
@@ -329,7 +318,7 @@ export function StudentsPage() {
       <Modal
         open={importOpen}
         title="批量导入学生"
-        description="支持从 Excel 另存为 CSV 后导入。需包含“姓名”列，推荐同时提供班级学号、学号、性别、手机、宿舍、床位和备注列。"
+        description="支持从 Excel 另存为 CSV 后导入。需包含“姓名”列，推荐同时提供短学号、学号、性别、手机、宿舍、床位和备注列。"
         onClose={() => setImportOpen(false)}
         footer={(
           <>
@@ -346,11 +335,11 @@ export function StudentsPage() {
         </div>
         <label className="check-line">
           <input type="checkbox" checked={shortNoFromStudentNo} onChange={(event) => setShortNoFromStudentNo(event.target.checked)} />
-          <span>没有班级学号时，使用长学号末 4 位；否则按导入顺序自动递增</span>
+          <span>没有短学号时，使用长学号末 4 位；否则按导入顺序自动递增</span>
         </label>
         <div className="csv-hint">
           <UserRound size={17} />
-          <span>表头示例：班级学号, 学号, 姓名, 性别, 手机, 宿舍, 床位, 备注</span>
+          <span>表头示例：短学号, 学号, 姓名, 性别, 手机, 宿舍, 床位, 备注</span>
         </div>
       </Modal>
     </div>

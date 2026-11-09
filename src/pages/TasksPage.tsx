@@ -20,8 +20,10 @@ import {
   FileSpreadsheet,
   FileText,
   ImagePlus,
+  MessageSquareText,
   MoreHorizontal,
   Pencil,
+  Phone,
   Plus,
   RotateCcw,
   Search,
@@ -32,6 +34,7 @@ import {
 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 import { useToast } from '../components/toast-context';
+import { LongPressButton } from '../components/LongPressButton';
 import { addDays, isoDateTime } from '../data/seed';
 import { Avatar, EmptyState, LoadingButton, Modal, PageHeading, Tag } from '../components/ui';
 import { formatDateTimeSeconds, percent, relativeDue } from '../lib/format';
@@ -39,6 +42,7 @@ import { buildTaskCsv, buildTaskHtmlReport, buildTaskXlsx } from '../lib/exports
 import { saveFile } from '../lib/download';
 import { blobToDataUrl, compressImage, deleteImage, getImage, putImage } from '../lib/imageStore';
 import { createId } from '../lib/id';
+import { callPhoneNumber } from '../lib/call';
 import type { CollectionTask, Student, SubmissionStatus, TaskAttachment } from '../types';
 
 interface AttachmentThumbProps {
@@ -136,9 +140,20 @@ export function TasksPage() {
   const classTasks = useMemo(
     () => tasks
       .filter((task) => task.classId === selectedClassId)
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+      .sort((a, b) => {
+        if (a.status !== b.status) return a.status === 'open' ? -1 : 1;
+        if (a.status === 'open') {
+          const aOutstanding = a.submissions.some((submission) => submission.status !== 'completed');
+          const bOutstanding = b.submissions.some((submission) => submission.status !== 'completed');
+          if (aOutstanding !== bOutstanding) return aOutstanding ? -1 : 1;
+          return a.dueDate.localeCompare(b.dueDate);
+        }
+        return b.dueDate.localeCompare(a.dueDate);
+      }),
     [tasks, selectedClassId],
   );
+  const openTasks = classTasks.filter((task) => task.status === 'open');
+  const closedTasks = classTasks.filter((task) => task.status === 'closed');
 
   const [selectedTaskId, setSelectedTaskId] = useState('');
   const [search, setSearch] = useState('');
@@ -232,6 +247,20 @@ export function TasksPage() {
       setMoreOpen(false);
       showToast('任务已删除', 'info');
     }
+  };
+
+  const callStudent = async (student: Student) => {
+    try {
+      await callPhoneNumber(student.phone);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '无法打开系统拨号应用', 'error');
+    }
+  };
+
+  const clearTaskNote = (student: Student) => {
+    if (!selectedTask) return;
+    setSubmissionNote(selectedTask.id, student.id, '');
+    showToast(`${student.name} 的备注已清除`, 'info');
   };
 
   const toggleTaskStatus = () => {
@@ -412,6 +441,31 @@ export function TasksPage() {
     );
   };
 
+  const renderTaskItem = (task: CollectionTask) => {
+    const total = students.length;
+    const taskCompleted = task.submissions.filter((submission) => submission.status === 'completed').length;
+    const taskOutstanding = task.submissions.filter((submission) => submission.status !== 'completed').length;
+    const due = relativeDue(task.dueDate);
+    return (
+      <button
+        key={task.id}
+        className={`task-list-item ${task.id === effectiveTaskId ? 'active' : ''} ${task.status === 'closed' ? 'task-closed' : ''}`}
+        onClick={() => { setSelectedTaskId(task.id); setSearch(''); setFilter('all'); setMoreOpen(false); setSelectedStudentIds([]); }}
+      >
+        <div className="task-list-top">
+          <span className={`task-state-dot ${task.status}`} />
+          <strong>{task.title}</strong>
+        </div>
+        <div className="task-list-progress"><span style={{ width: `${percent(taskCompleted, total)}%` }} /></div>
+        <div className="task-list-meta">
+          <span>{taskCompleted}/{total} 已交</span>
+          <span className={taskOutstanding > 0 ? 'danger-text' : 'muted'}>{taskOutstanding} 人未交</span>
+          <span className={due.tone}>{task.status === 'closed' ? `结束于 ${formatDateTimeSeconds(task.dueDate)}` : due.text}</span>
+        </div>
+      </button>
+    );
+  };
+
   return (
     <div className="page-stack">
       <PageHeading
@@ -438,30 +492,18 @@ export function TasksPage() {
               <button className="round-add" onClick={openCreate} aria-label="新建任务"><Plus size={18} /></button>
             </div>
             <div className="task-list">
-              {classTasks.map((task) => {
-                const total = students.length;
-                const taskCompleted = task.submissions.filter((submission) => submission.status === 'completed').length;
-                const taskOutstanding = task.submissions.filter((submission) => submission.status !== 'completed').length;
-                const due = relativeDue(task.dueDate);
-                return (
-                  <button
-                    key={task.id}
-                    className={`task-list-item ${task.id === effectiveTaskId ? 'active' : ''}`}
-                    onClick={() => { setSelectedTaskId(task.id); setSearch(''); setFilter('all'); setMoreOpen(false); setSelectedStudentIds([]); }}
-                  >
-                    <div className="task-list-top">
-                      <span className={`task-state-dot ${task.status}`} />
-                      <strong>{task.title}</strong>
-                    </div>
-                    <div className="task-list-progress"><span style={{ width: `${percent(taskCompleted, total)}%` }} /></div>
-                    <div className="task-list-meta">
-                      <span>{taskCompleted}/{total} 已交</span>
-                      <span className={taskOutstanding > 0 ? 'danger-text' : 'muted'}>{taskOutstanding} 人未交</span>
-                      <span className={due.tone}>{task.status === 'closed' ? '已结束' : due.text}</span>
-                    </div>
-                  </button>
-                );
-              })}
+              <div className="task-list-section">
+                <span>进行中 <b>{openTasks.length}</b></span>
+                <small>未完成和临近截止优先</small>
+              </div>
+              {openTasks.map(renderTaskItem)}
+              {closedTasks.length > 0 && (
+                <div className="task-list-section closed">
+                  <span>已结束 <b>{closedTasks.length}</b></span>
+                  <small>按结束时间排序</small>
+                </div>
+              )}
+              {closedTasks.map(renderTaskItem)}
             </div>
           </aside>
 
@@ -479,6 +521,7 @@ export function TasksPage() {
                   </span>
                 </div>
                 <div className="task-head-actions">
+                  <span className="task-export-label">导出格式</span>
                   <button className="button button-secondary" onClick={exportCsv}><Download size={16} /> CSV</button>
                   <button className="button button-secondary" onClick={exportXlsx} disabled={exporting === 'xlsx'}>
                     <LoadingButton loading={exporting === 'xlsx'}><FileSpreadsheet size={16} /> XLSX</LoadingButton>
@@ -572,21 +615,36 @@ export function TasksPage() {
                           {selectedStudentIds.includes(student.id) ? <CheckSquare size={19} /> : <Square size={19} />}
                         </button>
                         <div className="submission-student">
-                          <Avatar name={student.name} />
-                          <span><strong>{student.name}</strong><small>班级 {student.shortNo} · {student.studentNo || '未填写学号'}</small></span>
+                          <Avatar name={student.name} gender={student.gender} />
+                          <span>
+                            <div className="student-name-line">
+                              <strong>{student.name}</strong>
+                              <button className="inline-call-button compact" onClick={() => void callStudent(student)} aria-label={`拨打 ${student.name} 的电话`}><Phone size={14} /></button>
+                            </div>
+                            <small>短学号 {student.shortNo} · 学号 {student.studentNo || '未填写'}</small>
+                          </span>
                         </div>
                         <div className="submission-statuses">
                           {statusButton(student, 'completed', '已完成', CheckCircle2)}
                           {statusButton(student, 'pending', '待检查', Clock3)}
                           {statusButton(student, 'missing', '未完成', AlertCircle)}
                         </div>
-                        <label className="submission-note">
+                        <div className="submission-note">
                           <input
+                            id={`task-note-${student.id}`}
                             value={submission?.note ?? ''}
                             onChange={(event) => selectedTask && setSubmissionNote(selectedTask.id, student.id, event.target.value)}
                             placeholder="备注，例如：已提醒 / 图片不清晰"
                           />
-                        </label>
+                          <LongPressButton
+                            className="note-quick-action"
+                            onClick={() => document.getElementById(`task-note-${student.id}`)?.focus()}
+                            onLongPress={() => clearTaskNote(student)}
+                            title="长按清空备注"
+                          >
+                            <MessageSquareText size={15} />
+                          </LongPressButton>
+                        </div>
                         <div className="submission-attachments">
                           {submission?.attachments.map((attachment) => (
                             <span className="attachment-wrap" key={attachment.id}>
