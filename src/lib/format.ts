@@ -12,8 +12,12 @@ export const submissionLabels = {
   missing: '未完成',
 } as const;
 
+function parseLocalDateTime(value: string): Date {
+  return new Date(value.includes('T') ? value : `${value}T00:00:00`);
+}
+
 export function formatDateChinese(date: string): string {
-  const value = new Date(`${date}T00:00:00`);
+  const value = parseLocalDateTime(date);
   if (Number.isNaN(value.getTime())) return date;
   return `${value.getMonth() + 1}月${value.getDate()}日`;
 }
@@ -29,15 +33,33 @@ export function formatDateTime(value: string): string {
   return `${date.getMonth() + 1}月${date.getDate()}日 ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
+export function formatDateTimeSeconds(value: string): string {
+  const date = parseLocalDateTime(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`;
+}
+
+export function formatTimeSeconds(value: string): string {
+  const date = parseLocalDateTime(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`;
+}
+
 export function relativeDue(date: string): { text: string; tone: 'normal' | 'soon' | 'overdue' } {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const due = new Date(`${date}T00:00:00`);
-  const days = Math.round((due.getTime() - today.getTime()) / 86400000);
-  if (days < 0) return { text: `已逾期 ${Math.abs(days)} 天`, tone: 'overdue' };
-  if (days === 0) return { text: '今天截止', tone: 'soon' };
-  if (days === 1) return { text: '明天截止', tone: 'soon' };
-  return { text: `${days} 天后截止`, tone: 'normal' };
+  const now = new Date();
+  const due = parseLocalDateTime(date);
+  if (Number.isNaN(due.getTime())) return { text: '未设置截止时间', tone: 'normal' };
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dueDay = new Date(due.getFullYear(), due.getMonth(), due.getDate());
+  const days = Math.round((dueDay.getTime() - today.getTime()) / 86400000);
+
+  if (due.getTime() < now.getTime()) {
+    return { text: `已逾期 · ${formatDateTimeSeconds(date)}`, tone: 'overdue' };
+  }
+  if (days === 0) return { text: `今天 ${formatTimeSeconds(date)} 截止`, tone: 'soon' };
+  if (days === 1) return { text: `明天 ${formatTimeSeconds(date)} 截止`, tone: 'soon' };
+  if (days > 1 && days <= 7) return { text: `${days} 天后 ${formatTimeSeconds(date)} 截止`, tone: 'normal' };
+  return { text: `${formatDateTimeSeconds(date)} 截止`, tone: 'normal' };
 }
 
 export function getInitial(name: string): string {

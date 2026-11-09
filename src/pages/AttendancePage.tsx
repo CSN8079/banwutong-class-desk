@@ -1,28 +1,39 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type TouchEvent } from 'react';
 import {
+  ArrowLeft,
   CalendarDays,
+  Camera,
   Check,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Clock3,
   Download,
+  FileText,
+  ImagePlus,
+  Images,
   MessageSquareText,
+  Plus,
+  RotateCcw,
   Search,
   Shuffle,
   Sparkles,
+  Trash2,
+  Undo2,
   UserRoundX,
   UsersRound,
   XCircle,
 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
-import { useToast } from '../components/toast-context';
 import { isoDate } from '../data/seed';
-import { Avatar, EmptyState, Modal, PageHeading } from '../components/ui';
-import { attendanceLabels } from '../lib/format';
-import { buildAttendanceCsv } from '../lib/exports';
+import { Avatar, EmptyState, LoadingButton, Modal, PageHeading } from '../components/ui';
+import { useToast } from '../components/toast-context';
+import { attendanceLabels, formatDateTime } from '../lib/format';
+import { buildAttendanceCsv, buildAttendanceHtmlReport } from '../lib/exports';
 import { saveFile } from '../lib/download';
-import type { AttendanceStatus, PageKey, Student } from '../types';
+import { blobToDataUrl, compressImage, deleteImage, getImage, putImage } from '../lib/imageStore';
+import { createId } from '../lib/id';
+import type { AttendanceStatus, PageKey, Student, TaskAttachment } from '../types';
 
 const statusConfig: Array<{ key: Exclude<AttendanceStatus, 'unmarked'>; icon: typeof CheckCircle2 }> = [
   { key: 'present', icon: CheckCircle2 },
@@ -35,53 +46,140 @@ interface AttendancePageProps {
   onNavigate: (page: PageKey) => void;
 }
 
+interface PreviewState {
+  attachment: TaskAttachment;
+  studentId: string;
+  studentName: string;
+}
+
+interface UndoEntry {
+  studentId: string;
+  status: AttendanceStatus;
+  note: string;
+}
+
+function makeAttendanceAttachment(file: File, blob: Blob): TaskAttachment {
+  const now = new Date();
+  return {
+    id: createId('attendance-image'),
+    name: file.name || `点名备注-${now.toISOString().slice(11, 19)}.jpg`,
+    mimeType: blob.type || file.type,
+    size: blob.size,
+    createdAt: now.toISOString(),
+  };
+}
+
+function StoredImageThumb({ attachment, onOpen }: { attachment: TaskAttachment; onOpen: () => void }) {
+  const [url, setUrl] = useState('');
+  useEffect(() => {
+    let active = true;
+    getImage(attachment.id).then(async (blob) => {
+      if (!active || !blob) return;
+      setUrl(await blobToDataUrl(blob));
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [attachment.id]);
+
+  return (
+    <button className="attendance-image-thumb" onClick={onOpen} title={attachment.name}>
+      {url ? <img src={url} alt={attachment.name} /> : <span className="thumb-loading" />}
+    </button>
+  );
+}
+
+function StoredImagePreview({ attachment }: { attachment: TaskAttachment }) {
+  const [url, setUrl] = useState('');
+  useEffect(() => {
+    let active = true;
+    getImage(attachment.id).then(async (blob) => {
+      if (!active || !blob) return;
+      setUrl(await blobToDataUrl(blob));
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [attachment.id]);
+  return (
+    <div className="image-preview image-preview-clear">
+      {url ? <img src={url} alt={attachment.name} /> : <div className="preview-loading"><span className="thumb-loading" /> 正在读取图片…</div>}
+    </div>
+  );
+}
+
 export function AttendancePage({ onNavigate }: AttendancePageProps) {
   const classes = useAppStore((state) => state.classes);
   const selectedClassId = useAppStore((state) => state.selectedClassId);
   const allStudents = useAppStore((state) => state.students);
   const sessions = useAppStore((state) => state.sessions);
   const presets = useAppStore((state) => state.presets);
-  const ensureSession = useAppStore((state) => state.ensureSession);
+  const createSession = useAppStore((state) => state.createSession);
   const setAttendance = useAppStore((state) => state.setAttendance);
   const bulkAttendance = useAppStore((state) => state.bulkAttendance);
+  const addAttendanceAttachment = useAppStore((state) => state.addAttendanceAttachment);
+  const removeAttendanceAttachment = useAppStore((state) => state.removeAttendanceAttachment);
   const completeSession = useAppStore((state) => state.completeSession);
   const { showToast } = useToast();
   const classRoom = classes.find((item) => item.id === selectedClassId);
   const students = useMemo(
     () => allStudents
       .filter((student) => student.classId === selectedClassId && student.active)
-      .sort((a, b) => a.studentNo.localeCompare(b.studentNo, 'zh-CN', { numeric: true })),
+      .sort((a, b) => a.shortNo.localeCompare(b.shortNo, 'zh-CN', { numeric: true })),
     [allStudents, selectedClassId],
   );
 
   const [date, setDate] = useState(isoDate());
+  const [selectedSessionId, setSelectedSessionId] = useState('');
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<'all' | AttendanceStatus>('all');
-  const [noteStudent, setNoteStudent] = useState<Student | null>(null);
+  const [newSessionOpen, setNewSessionOpen] = useState(false);
+  const [newSessionTitle, setNewSessionTitle] = useState('');
+  const [noteStudentId, setNoteStudentId] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
   const [noteStatusDraft, setNoteStatusDraft] = useState<AttendanceStatus>('unmarked');
+  const [noteUploading, setNoteUploading] = useState(false);
+  const [cardUploading, setCardUploading] = useState(false);
   const [randomOpen, setRandomOpen] = useState(false);
   const [randomStudent, setRandomStudent] = useState<Student | null>(null);
+  const [viewMode, setViewMode] = useState<'list' | 'card'>('list');
+  const [cardIndex, setCardIndex] = useState(0);
+  const [undoStack, setUndoStack] = useState<UndoEntry[]>([]);
+  const [preview, setPreview] = useState<PreviewState | null>(null);
+  const [exporting, setExporting] = useState('');
+  const noteUploadRef = useRef<HTMLInputElement>(null);
+  const cardUploadRef = useRef<HTMLInputElement>(null);
+  const pageScrollRef = useRef(0);
+  const touchStartX = useRef<number | null>(null);
 
-  const session = sessions.find((item) => item.classId === selectedClassId && item.date === date);
-  useEffect(() => {
-    if (selectedClassId) ensureSession(selectedClassId, date);
-  }, [selectedClassId, date, ensureSession]);
-
-  const records = useMemo(
-    () => new Map(session?.records.map((record) => [record.studentId, record]) ?? []),
-    [session],
+  const daySessions = useMemo(
+    () => sessions
+      .filter((item) => item.classId === selectedClassId && item.date === date)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    [sessions, selectedClassId, date],
   );
+  const activeSessions = daySessions.filter((item) => item.status === 'active');
+  const completedSessions = daySessions.filter((item) => item.status === 'completed');
+  const effectiveSessionId = activeSessions.some((item) => item.id === selectedSessionId)
+    ? selectedSessionId
+    : (activeSessions[0]?.id ?? '');
+  const session = activeSessions.find((item) => item.id === effectiveSessionId) ?? null;
+
+  const records = new Map(session?.records.map((record) => [record.studentId, record]) ?? []);
   const marked = students.filter((student) => (records.get(student.id)?.status ?? 'unmarked') !== 'unmarked').length;
   const present = students.filter((student) => ['present', 'late'].includes(records.get(student.id)?.status ?? '')).length;
 
   const visibleStudents = students.filter((student) => {
-    const record = records.get(student.id);
-    const status = record?.status ?? 'unmarked';
+    const status = records.get(student.id)?.status ?? 'unmarked';
     const keyword = search.trim().toLowerCase();
-    const matchesSearch = !keyword || student.name.toLowerCase().includes(keyword) || student.studentNo.includes(keyword);
+    const matchesSearch = !keyword
+      || student.name.toLowerCase().includes(keyword)
+      || student.shortNo.toLowerCase().includes(keyword)
+      || student.studentNo.includes(keyword);
     return matchesSearch && (filter === 'all' || status === filter);
   });
+
+  const noteStudent = students.find((student) => student.id === noteStudentId) ?? null;
+  const noteRecord = noteStudentId ? records.get(noteStudentId) : undefined;
+  const cardStudent = students[Math.min(cardIndex, Math.max(0, students.length - 1))];
+  const cardRecord = cardStudent ? records.get(cardStudent.id) : undefined;
+  const cardStatus = cardRecord?.status ?? 'unmarked';
 
   const countByStatus = (status: AttendanceStatus) =>
     students.filter((student) => (records.get(student.id)?.status ?? 'unmarked') === status).length;
@@ -90,59 +188,216 @@ export function AttendancePage({ onNavigate }: AttendancePageProps) {
     const next = new Date(`${date}T12:00:00`);
     next.setDate(next.getDate() + days);
     setDate(isoDate(next));
+    setSelectedSessionId('');
   };
 
-  const handleStatus = (student: Student, status: AttendanceStatus) => {
-    setAttendance(selectedClassId, date, student.id, status);
+  const openNewSession = () => {
+    setNewSessionTitle(`第 ${daySessions.length + 1} 次点名`);
+    setNewSessionOpen(true);
+  };
+
+  const submitNewSession = () => {
+    if (!selectedClassId) return;
+    const created = createSession(selectedClassId, date, newSessionTitle);
+    setSelectedSessionId(created.id);
+    setNewSessionOpen(false);
+    setViewMode('list');
+    showToast('已创建新的点名场次');
+  };
+
+  const handleStatus = (student: Student, status: Exclude<AttendanceStatus, 'unmarked'>) => {
+    if (!session) return;
+    const current = records.get(student.id)?.status ?? 'unmarked';
+    setAttendance(session.id, student.id, current === status ? 'unmarked' : status);
+  };
+
+  const saveCardUndo = (studentId: string) => {
+    const record = records.get(studentId);
+    setUndoStack((stack) => [
+      ...stack.slice(-29),
+      { studentId, status: record?.status ?? 'unmarked', note: record?.note ?? '' },
+    ]);
+  };
+
+  const handleCardStatus = (student: Student, status: Exclude<AttendanceStatus, 'unmarked'>) => {
+    if (!session) return;
+    saveCardUndo(student.id);
+    const current = records.get(student.id)?.status ?? 'unmarked';
+    setAttendance(session.id, student.id, current === status ? 'unmarked' : status);
+  };
+
+  const undoLast = () => {
+    if (!session || undoStack.length === 0) return;
+    const last = undoStack[undoStack.length - 1];
+    setAttendance(session.id, last.studentId, last.status, last.note);
+    setUndoStack((stack) => stack.slice(0, -1));
+    const index = students.findIndex((student) => student.id === last.studentId);
+    if (index >= 0) setCardIndex(index);
+    showToast('已撤回上一次修改', 'info');
+  };
+
+  const goToCard = (index: number) => {
+    setCardIndex(Math.max(0, Math.min(students.length - 1, index)));
+  };
+
+  const handleTouchStart = (event: TouchEvent<HTMLDivElement>) => {
+    touchStartX.current = event.changedTouches[0]?.clientX ?? null;
+  };
+
+  const handleTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
+    if (touchStartX.current === null) return;
+    const delta = (event.changedTouches[0]?.clientX ?? touchStartX.current) - touchStartX.current;
+    touchStartX.current = null;
+    if (delta > 55) goToCard(cardIndex - 1);
+    if (delta < -55) goToCard(cardIndex + 1);
   };
 
   const openNote = (student: Student) => {
-    setNoteStudent(student);
+    pageScrollRef.current = window.scrollY;
+    setNoteStudentId(student.id);
     setNoteDraft(records.get(student.id)?.note ?? '');
     setNoteStatusDraft(records.get(student.id)?.status ?? 'unmarked');
   };
 
+  const restorePagePosition = () => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => window.scrollTo(0, pageScrollRef.current));
+    });
+  };
+
+  const closeNote = () => {
+    setNoteStudentId(null);
+    restorePagePosition();
+  };
+
   const saveNote = () => {
-    if (!noteStudent) return;
-    setAttendance(selectedClassId, date, noteStudent.id, noteStatusDraft, noteDraft);
-    setNoteStudent(null);
+    if (!session || !noteStudentId) return;
+    setAttendance(session.id, noteStudentId, noteStatusDraft, noteDraft);
+    closeNote();
     showToast('备注已保存');
   };
 
-  const applyPreset = (text: string, status?: AttendanceStatus) => {
+  const applyNotePreset = (text: string, status?: AttendanceStatus) => {
     setNoteDraft(text);
     if (status) setNoteStatusDraft(status);
   };
 
-  const markAllPresent = () => {
-    if (students.length === 0) return;
-    bulkAttendance(selectedClassId, date, 'present');
-    showToast(`已将 ${students.length} 名学生标记为出勤`);
-  };
-
-  const finishAttendance = () => {
-    if (session) {
-      completeSession(session.id);
-      showToast('本次点名已完成，记录已归档');
+  const attachNoteImage = async (file: File | undefined) => {
+    if (!file || !session || !noteStudentId) return;
+    setNoteUploading(true);
+    try {
+      const compressed = await compressImage(file);
+      const attachment = makeAttendanceAttachment(file, compressed);
+      await putImage(attachment.id, compressed);
+      addAttendanceAttachment(session.id, noteStudentId, attachment);
+      showToast('备注图片已添加');
+    } catch {
+      showToast('图片处理失败，请重试', 'error');
+    } finally {
+      setNoteUploading(false);
     }
   };
 
-  const exportAttendance = async () => {
+  const attachCardImage = async (file: File | undefined) => {
+    if (!file || !session || !cardStudent) return;
+    setCardUploading(true);
+    try {
+      const compressed = await compressImage(file);
+      const attachment = makeAttendanceAttachment(file, compressed);
+      await putImage(attachment.id, compressed);
+      addAttendanceAttachment(session.id, cardStudent.id, attachment);
+      showToast('备注图片已添加');
+    } catch {
+      showToast('图片处理失败，请重试', 'error');
+    } finally {
+      setCardUploading(false);
+    }
+  };
+
+  const removeNoteImage = async (attachment: TaskAttachment) => {
+    if (!session || !noteStudentId) return;
+    if (!window.confirm(`删除图片「${attachment.name}」吗？`)) return;
+    await deleteImage(attachment.id);
+    removeAttendanceAttachment(session.id, noteStudentId, attachment.id);
+    showToast('图片已删除', 'info');
+  };
+
+  const clearNote = async () => {
+    if (!session || !noteStudentId) return;
+    const images = records.get(noteStudentId)?.images ?? [];
+    if (!window.confirm('清空该学生的备注文字和全部备注图片吗？')) return;
+    for (const image of images) await deleteImage(image.id);
+    for (const image of images) removeAttendanceAttachment(session.id, noteStudentId, image.id);
+    setNoteDraft('');
+    setAttendance(session.id, noteStudentId, noteStatusDraft, '');
+    showToast('备注已清空', 'info');
+  };
+
+  const clearCardNote = async () => {
+    if (!session || !cardStudent) return;
+    const images = cardRecord?.images ?? [];
+    if (!window.confirm('清空当前学生的备注文字和图片吗？')) return;
+    saveCardUndo(cardStudent.id);
+    for (const image of images) await deleteImage(image.id);
+    for (const image of images) removeAttendanceAttachment(session.id, cardStudent.id, image.id);
+    setAttendance(session.id, cardStudent.id, cardStatus, '');
+    showToast('备注已清空', 'info');
+  };
+
+  const markAllPresent = () => {
+    if (!session || students.length === 0) return;
+    bulkAttendance(session.id, 'present');
+    showToast(`已将 ${students.length} 名学生标记为出勤`);
+  };
+
+  const resetAttendance = () => {
     if (!session) return;
-    await saveFile(
-      `${classRoom?.name ?? '班级'}-点名-${date}.csv`,
-      buildAttendanceCsv(session, students, classRoom),
-      'text/csv;charset=utf-8',
-    );
-    showToast('点名记录 CSV 已生成');
+    bulkAttendance(session.id, 'unmarked');
+    showToast('已重置为未点名', 'info');
+  };
+
+  const finishAttendance = () => {
+    if (!session) return;
+    const unmarkedCount = countByStatus('unmarked');
+    if (unmarkedCount > 0 && !window.confirm(`还有 ${unmarkedCount} 人未点名，确定完成并折叠本次点名吗？`)) return;
+    completeSession(session.id);
+    setSelectedSessionId('');
+    setViewMode('list');
+    showToast('本次点名已完成并折叠');
+  };
+
+  const exportAttendance = async (format: 'csv' | 'html', targetSession = session) => {
+    if (!targetSession) return;
+    setExporting(format);
+    try {
+      if (format === 'csv') {
+        await saveFile(
+          `${classRoom?.name ?? '班级'}-${targetSession.title}-${targetSession.date}.csv`,
+          buildAttendanceCsv(targetSession, students, classRoom),
+          'text/csv;charset=utf-8',
+        );
+      } else {
+        const html = await buildAttendanceHtmlReport(targetSession, students, classRoom);
+        await saveFile(`${classRoom?.name ?? '班级'}-${targetSession.title}-${targetSession.date}.html`, html, 'text/html;charset=utf-8');
+      }
+      showToast(format === 'csv' ? '点名 CSV 已生成' : '点名 HTML 已生成');
+    } catch {
+      showToast('导出失败，请重试', 'error');
+    } finally {
+      setExporting('');
+    }
+  };
+
+  const openRandom = () => {
+    setRandomStudent(null);
+    setRandomOpen(true);
   };
 
   const drawRandom = () => {
     if (students.length === 0) return;
     const pool = students.filter((student) => (records.get(student.id)?.status ?? 'unmarked') === 'unmarked');
     const candidates = pool.length > 0 ? pool : students;
-    const picked = candidates[Math.floor(Math.random() * candidates.length)];
-    setRandomStudent(picked);
+    setRandomStudent(candidates[Math.floor(Math.random() * candidates.length)]);
   };
 
   if (students.length === 0) {
@@ -150,154 +405,296 @@ export function AttendancePage({ onNavigate }: AttendancePageProps) {
       <div className="page-stack">
         <PageHeading eyebrow="ATTENDANCE" title="课堂点名" description="快速记录出勤、请假、迟到和缺勤，并添加备注。" />
         <section className="panel">
-          <EmptyState
-            icon={<UsersRound size={29} />}
-            title="名单里还没有学生"
-            description="先添加班级学生，之后就可以开始点名。"
-            action={<button className="button button-primary" onClick={() => onNavigate('students')}>去添加学生</button>}
-          />
+          <EmptyState icon={<UsersRound size={29} />} title="名单里还没有学生" description="先添加班级学生，之后就可以开始点名。" action={<button className="button button-primary" onClick={() => onNavigate('students')}>去添加学生</button>} />
         </section>
       </div>
     );
   }
 
   return (
-    <div className="page-stack">
-      <PageHeading
-        eyebrow="ATTENDANCE"
-        title="课堂点名"
-        description={`${classRoom?.name ?? ''} · 点击状态即可记录，所有修改自动保存`}
-        actions={(
-          <>
-            <button className="button button-secondary" onClick={() => setRandomOpen(true)}><Shuffle size={17} /> 随机点名</button>
-            <button className="button button-secondary" onClick={exportAttendance}><Download size={17} /> 导出记录</button>
-            <button className="button button-primary" onClick={finishAttendance}><Check size={18} /> 完成点名</button>
-          </>
-        )}
-      />
+    <div className={`page-stack attendance-page ${viewMode === 'card' ? 'card-mode-active' : ''}`}>
+      {viewMode !== 'card' && (
+        <PageHeading
+          eyebrow="ATTENDANCE"
+          title="课堂点名"
+          description={`${classRoom?.name ?? ''} · 一天可创建多个点名场次，所有修改自动保存`}
+          actions={(
+            <>
+              <button className="button button-secondary" onClick={openNewSession}><Plus size={17} /> 新建点名</button>
+              <button className="button button-secondary" disabled={!session} onClick={openRandom}><Shuffle size={17} /> 随机点名</button>
+              {session && <button className="button button-secondary" onClick={() => setViewMode('card')}><Images size={17} /> 逐个点名</button>}
+              {session && <button className="button button-primary" onClick={finishAttendance}><Check size={18} /> 完成点名</button>}
+            </>
+          )}
+        />
+      )}
 
-      <section className="attendance-control panel">
-        <div className="date-control">
-          <button className="icon-button" onClick={() => changeDate(-1)} aria-label="前一天"><ChevronLeft size={18} /></button>
-          <label>
-            <CalendarDays size={17} />
-            <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
-          </label>
-          <button className="icon-button" onClick={() => changeDate(1)} aria-label="后一天"><ChevronRight size={18} /></button>
-          {date !== isoDate() && <button className="text-button" onClick={() => setDate(isoDate())}>回到今天</button>}
-        </div>
-        <div className="attendance-quick-actions">
-          <button className="button button-soft" onClick={markAllPresent}><Sparkles size={17} /> 全部出勤</button>
-          <button className="button button-soft" onClick={() => bulkAttendance(selectedClassId, date, 'unmarked')}>重置点名</button>
-        </div>
-      </section>
-
-      <section className="attendance-stats">
-        <div className="attendance-stat primary">
-          <span>已点名</span><strong>{marked}<small> / {students.length}</small></strong>
-          <div className="mini-progress"><i style={{ width: `${students.length ? (marked / students.length) * 100 : 0}%` }} /></div>
-        </div>
-        <button className={`attendance-stat stat-present ${filter === 'present' ? 'active' : ''}`} onClick={() => setFilter(filter === 'present' ? 'all' : 'present')}>
-          <span><CheckCircle2 size={16} /> 出勤</span><strong>{countByStatus('present')}</strong>
-        </button>
-        <button className={`attendance-stat stat-late ${filter === 'late' ? 'active' : ''}`} onClick={() => setFilter(filter === 'late' ? 'all' : 'late')}>
-          <span><Clock3 size={16} /> 迟到</span><strong>{countByStatus('late')}</strong>
-        </button>
-        <button className={`attendance-stat stat-leave ${filter === 'leave' ? 'active' : ''}`} onClick={() => setFilter(filter === 'leave' ? 'all' : 'leave')}>
-          <span><CalendarDays size={16} /> 请假</span><strong>{countByStatus('leave')}</strong>
-        </button>
-        <button className={`attendance-stat stat-absent ${filter === 'absent' ? 'active' : ''}`} onClick={() => setFilter(filter === 'absent' ? 'all' : 'absent')}>
-          <span><XCircle size={16} /> 缺勤</span><strong>{countByStatus('absent')}</strong>
-        </button>
-        <button className={`attendance-stat stat-unmarked ${filter === 'unmarked' ? 'active' : ''}`} onClick={() => setFilter(filter === 'unmarked' ? 'all' : 'unmarked')}>
-          <span><UserRoundX size={16} /> 未点名</span><strong>{countByStatus('unmarked')}</strong>
-        </button>
-      </section>
-
-      <section className="attendance-toolbar panel">
-        <div className="search-box">
-          <Search size={18} />
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索姓名或学号" />
-          {search && <button onClick={() => setSearch('')}>清除</button>}
-        </div>
-        <div className="attendance-summary-inline">
-          <span><i className="legend-dot" style={{ background: '#1d7a5f' }} /> 实到 {present} 人</span>
-          <span><i className="legend-dot" style={{ background: '#c88925' }} /> 未到 {students.length - present} 人</span>
-          <span className={session?.status === 'completed' ? 'completed-label' : 'draft-label'}>
-            {session?.status === 'completed' ? '已完成归档' : '自动保存中'}
-          </span>
-        </div>
-      </section>
-
-      {visibleStudents.length === 0 ? (
-        <section className="panel">
-          <EmptyState icon={<Search size={27} />} title="没有符合筛选的学生" description="调整筛选条件或清除搜索关键词。" action={<button className="button button-secondary" onClick={() => { setSearch(''); setFilter('all'); }}>查看全部</button>} />
-        </section>
-      ) : (
-        <section className="attendance-grid">
-          {visibleStudents.map((student) => {
-            const record = records.get(student.id);
-            const status = record?.status ?? 'unmarked';
-            return (
-              <article className={`attendance-card status-border-${status}`} key={student.id}>
-                <div className="attendance-card-head">
-                  <div className="student-identity">
-                    <Avatar name={student.name} />
-                    <span><strong>{student.name}</strong><small>{student.studentNo || '未填写学号'}</small></span>
-                  </div>
-                  <button className={`note-button ${record?.note ? 'has-note' : ''}`} onClick={() => openNote(student)}>
-                    <MessageSquareText size={15} /> {record?.note ? '查看备注' : '添加备注'}
-                  </button>
-                </div>
-                <div className="status-button-row">
+      {viewMode === 'card' && session ? (
+        <section className="attendance-card-mode">
+          <div className="card-mode-topline">
+            <button className="text-button" onClick={() => setViewMode('list')}><ArrowLeft size={16} /> 返回名单</button>
+            <div className="card-mode-session"><strong>{session.title}</strong><span>{date} · {marked}/{students.length} 已点名</span></div>
+            <button className="button button-soft" onClick={undoLast} disabled={undoStack.length === 0}><Undo2 size={16} /> 撤回</button>
+          </div>
+          <div className="card-stack" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
+            <button className="card-peek card-peek-prev" onClick={() => goToCard(cardIndex - 1)} disabled={cardIndex === 0}>
+              <span>上一位</span><strong>{students[cardIndex - 1]?.name ?? '已是第一位'}</strong>
+            </button>
+            {cardStudent && (
+              <article className={`flash-card flash-card-${cardStatus}`}>
+                <div className="flash-card-index">{cardIndex + 1} / {students.length}</div>
+                <Avatar name={cardStudent.name} size="lg" />
+                <span className="flash-short-no">班级学号 {cardStudent.shortNo}</span>
+                <h2>{cardStudent.name}</h2>
+                <p>{cardStudent.studentNo || '未填写长学号'} · {cardStudent.dorm || '未填写宿舍'}{cardStudent.bed ? ` · ${cardStudent.bed}` : ''}</p>
+                <div className="flash-status-buttons">
                   {statusConfig.map(({ key, icon: Icon }) => (
-                    <button
-                      key={key}
-                      className={`status-choice choice-${key} ${status === key ? 'selected' : ''}`}
-                      onClick={() => handleStatus(student, key)}
-                      aria-pressed={status === key}
-                    >
-                      <Icon size={16} />
-                      <span>{attendanceLabels[key]}</span>
+                    <button key={key} className={`flash-status choice-${key} ${cardStatus === key ? 'selected' : ''}`} onClick={() => handleCardStatus(cardStudent, key)}>
+                      <Icon size={19} /><span>{attendanceLabels[key]}</span>
                     </button>
                   ))}
                 </div>
-                {record?.note && <p className="attendance-note-preview">{record.note}</p>}
+                {cardStatus !== 'unmarked' && <span className="tap-cancel-hint">再次点击已选状态可恢复为未点名</span>}
+                <div className="flash-note-area">
+                  <label className="field">
+                    <span>点名备注</span>
+                    <textarea
+                      rows={3}
+                      value={cardRecord?.note ?? ''}
+                      onChange={(event) => session && setAttendance(session.id, cardStudent.id, cardStatus, event.target.value)}
+                      placeholder="输入备注，或使用下方快捷备注"
+                    />
+                  </label>
+                  <div className="flash-presets">
+                    {presets.map((preset) => (
+                      <button key={preset.id} className="preset-chip" style={{ borderColor: `${preset.color}44`, color: preset.color }} onClick={() => {
+                        saveCardUndo(cardStudent.id);
+                        setAttendance(session.id, cardStudent.id, preset.status ?? cardStatus, preset.text);
+                      }}>{preset.label}</button>
+                    ))}
+                  </div>
+                  <div className="flash-note-actions">
+                    <input ref={cardUploadRef} type="file" accept="image/*" hidden onChange={(event) => { void attachCardImage(event.target.files?.[0]); event.target.value = ''; }} />
+                    <button className="button button-secondary" onClick={() => cardUploadRef.current?.click()} disabled={cardUploading}>
+                      <Camera size={16} /> {cardUploading ? '处理中…' : '添加备注图片'}
+                    </button>
+                    <button className="button button-secondary" onClick={() => void clearCardNote()}><Trash2 size={16} /> 清空备注</button>
+                  </div>
+                  {cardRecord?.images && cardRecord.images.length > 0 && (
+                    <div className="attendance-image-row">
+                      {cardRecord.images.map((image) => <StoredImageThumb key={image.id} attachment={image} onOpen={() => setPreview({ attachment: image, studentId: cardStudent.id, studentName: cardStudent.name })} />)}
+                    </div>
+                  )}
+                </div>
               </article>
-            );
-          })}
+            )}
+            <button className="card-peek card-peek-next" onClick={() => goToCard(cardIndex + 1)} disabled={cardIndex >= students.length - 1}>
+              <span>下一位</span><strong>{students[cardIndex + 1]?.name ?? '已是最后一位'}</strong>
+            </button>
+          </div>
+          <div className="card-mode-footer">
+            <button className="button button-secondary" onClick={() => goToCard(cardIndex - 1)} disabled={cardIndex === 0}><ChevronLeft size={17} /> 上一位</button>
+            <span>左右滑动或点击切换学生</span>
+            <button className="button button-primary" onClick={() => goToCard(cardIndex + 1)} disabled={cardIndex >= students.length - 1}>下一位 <ChevronRight size={17} /></button>
+          </div>
         </section>
+      ) : (
+        <>
+          <section className="attendance-control panel">
+            <div className="date-control">
+              <button className="icon-button" onClick={() => changeDate(-1)} aria-label="前一天"><ChevronLeft size={18} /></button>
+              <label><CalendarDays size={17} /><input type="date" value={date} onChange={(event) => { setDate(event.target.value); setSelectedSessionId(''); }} /></label>
+              <button className="icon-button" onClick={() => changeDate(1)} aria-label="后一天"><ChevronRight size={18} /></button>
+              {date !== isoDate() && <button className="text-button" onClick={() => { setDate(isoDate()); setSelectedSessionId(''); }}>回到今天</button>}
+            </div>
+            <div className="active-session-tabs">
+              {activeSessions.length === 0 && <span className="no-session-label">当天暂无进行中的点名</span>}
+              {activeSessions.map((item) => (
+                <button key={item.id} className={item.id === effectiveSessionId ? 'active' : ''} onClick={() => setSelectedSessionId(item.id)}>
+                  {item.title}
+                </button>
+              ))}
+              <button className="new-session-inline" onClick={openNewSession}><Plus size={15} /> 新建</button>
+            </div>
+          </section>
+
+          {!session ? (
+            <section className="panel">
+              <EmptyState
+                icon={<CalendarDays size={29} />}
+                title={`${date} 还没有进行中的点名`}
+                description="一天可以创建多次点名，并为每次点名设置标题。已完成场次会折叠显示在下方。"
+                action={<button className="button button-primary" onClick={openNewSession}><Plus size={17} /> 新建点名</button>}
+              />
+            </section>
+          ) : (
+            <>
+              <section className="session-hero panel">
+                <div>
+                  <span className="eyebrow">CURRENT SESSION</span>
+                  <h2>{session.title}</h2>
+                  <p>{date} · 创建于 {formatDateTime(session.createdAt)}</p>
+                </div>
+                <div className="session-export-actions">
+                  <button className="button button-secondary" disabled={exporting === 'csv'} onClick={() => void exportAttendance('csv')}>
+                    <LoadingButton loading={exporting === 'csv'}><Download size={16} /> CSV</LoadingButton>
+                  </button>
+                  <button className="button button-secondary" disabled={exporting === 'html'} onClick={() => void exportAttendance('html')}>
+                    <LoadingButton loading={exporting === 'html'}><FileText size={16} /> HTML</LoadingButton>
+                  </button>
+                </div>
+              </section>
+
+              <section className="attendance-stats">
+                <div className="attendance-stat primary"><span>已点名</span><strong>{marked}<small> / {students.length}</small></strong><div className="mini-progress"><i style={{ width: `${students.length ? (marked / students.length) * 100 : 0}%` }} /></div></div>
+                <button className={`attendance-stat stat-present ${filter === 'present' ? 'active' : ''}`} onClick={() => setFilter(filter === 'present' ? 'all' : 'present')}><span><CheckCircle2 size={16} /> 出勤</span><strong>{countByStatus('present')}</strong></button>
+                <button className={`attendance-stat stat-late ${filter === 'late' ? 'active' : ''}`} onClick={() => setFilter(filter === 'late' ? 'all' : 'late')}><span><Clock3 size={16} /> 迟到</span><strong>{countByStatus('late')}</strong></button>
+                <button className={`attendance-stat stat-leave ${filter === 'leave' ? 'active' : ''}`} onClick={() => setFilter(filter === 'leave' ? 'all' : 'leave')}><span><CalendarDays size={16} /> 请假</span><strong>{countByStatus('leave')}</strong></button>
+                <button className={`attendance-stat stat-absent ${filter === 'absent' ? 'active' : ''}`} onClick={() => setFilter(filter === 'absent' ? 'all' : 'absent')}><span><XCircle size={16} /> 缺勤</span><strong>{countByStatus('absent')}</strong></button>
+                <button className={`attendance-stat stat-unmarked ${filter === 'unmarked' ? 'active' : ''}`} onClick={() => setFilter(filter === 'unmarked' ? 'all' : 'unmarked')}><span><UserRoundX size={16} /> 未点名</span><strong>{countByStatus('unmarked')}</strong></button>
+              </section>
+
+              <section className="attendance-toolbar panel">
+                <div className="search-box"><Search size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索姓名、班级学号或学号" />{search && <button onClick={() => setSearch('')}>清除</button>}</div>
+                <div className="attendance-summary-inline">
+                  <span><i className="legend-dot" style={{ background: '#1d7a5f' }} /> 实到 {present} 人</span>
+                  <span><i className="legend-dot" style={{ background: '#c88925' }} /> 未到 {students.length - present} 人</span>
+                  <button className="button button-soft" onClick={markAllPresent}><Sparkles size={16} /> 全部出勤</button>
+                  <button className="button button-soft" onClick={resetAttendance}><RotateCcw size={16} /> 重置</button>
+                </div>
+              </section>
+
+              {visibleStudents.length === 0 ? (
+                <section className="panel"><EmptyState icon={<Search size={27} />} title="没有符合筛选的学生" description="调整筛选条件或清除搜索关键词。" action={<button className="button button-secondary" onClick={() => { setSearch(''); setFilter('all'); }}>查看全部</button>} /></section>
+              ) : (
+                <section className="attendance-grid">
+                  {visibleStudents.map((student) => {
+                    const record = records.get(student.id);
+                    const status = record?.status ?? 'unmarked';
+                    return (
+                      <article className={`attendance-card status-border-${status}`} key={student.id}>
+                        <div className="attendance-card-head">
+                          <div className="student-identity">
+                            <Avatar name={student.name} />
+                            <span><strong>{student.name}</strong><small>班级 {student.shortNo} · {student.studentNo || '未填写学号'}</small></span>
+                          </div>
+                          <button className={`note-button ${record?.note || record?.images.length ? 'has-note' : ''}`} onClick={() => openNote(student)}>
+                            <MessageSquareText size={15} /> {record?.note || record?.images.length ? '查看备注' : '添加备注'}
+                          </button>
+                        </div>
+                        <div className="status-button-row">
+                          {statusConfig.map(({ key, icon: Icon }) => (
+                            <button key={key} className={`status-choice choice-${key} ${status === key ? 'selected' : ''}`} onClick={() => handleStatus(student, key)} aria-pressed={status === key}>
+                              <Icon size={16} /><span>{attendanceLabels[key]}</span>
+                            </button>
+                          ))}
+                        </div>
+                        {record?.note && <p className="attendance-note-preview">{record.note}</p>}
+                        {record?.images && record.images.length > 0 && (
+                          <div className="attendance-image-row compact">
+                            {record.images.map((image) => <StoredImageThumb key={image.id} attachment={image} onOpen={() => setPreview({ attachment: image, studentId: student.id, studentName: student.name })} />)}
+                          </div>
+                        )}
+                      </article>
+                    );
+                  })}
+                </section>
+              )}
+            </>
+          )}
+
+          <section className="session-history-panel panel">
+            <header className="panel-header">
+              <div><span className="eyebrow">COMPLETED</span><h2>已完成点名</h2></div>
+              <span className="muted">{completedSessions.length} 个场次</span>
+            </header>
+            {completedSessions.length === 0 ? (
+              <div className="compact-empty">当天还没有已完成的点名场次</div>
+            ) : (
+              <div className="session-accordion-list">
+                {completedSessions.map((completed) => {
+                  const completedMap = new Map(completed.records.map((record) => [record.studentId, record]));
+                  const completedPresent = students.filter((student) => ['present', 'late'].includes(completedMap.get(student.id)?.status ?? '')).length;
+                  const completedLeave = students.filter((student) => completedMap.get(student.id)?.status === 'leave').length;
+                  const completedAbsent = students.filter((student) => completedMap.get(student.id)?.status === 'absent').length;
+                  return (
+                    <details className="session-accordion" key={completed.id}>
+                      <summary>
+                        <span className="session-accordion-dot" />
+                        <div><strong>{completed.title}</strong><small>{formatDateTime(completed.createdAt)} · {completed.records.length} 名学生</small></div>
+                        <div className="session-accordion-counts"><span className="present">实到 {completedPresent}</span><span className="leave">请假 {completedLeave}</span><span className="absent">缺勤 {completedAbsent}</span></div>
+                        <ChevronRight size={18} className="accordion-chevron" />
+                      </summary>
+                      <div className="session-accordion-body">
+                        <div className="accordion-export-row">
+                          <button className="text-button" onClick={() => void exportAttendance('csv', completed)}><Download size={15} /> 导出 CSV</button>
+                          <button className="text-button" onClick={() => void exportAttendance('html', completed)}><FileText size={15} /> 导出 HTML</button>
+                        </div>
+                        <div className="session-compact-list">
+                          {students.map((student) => {
+                            const record = completedMap.get(student.id);
+                            const status = record?.status ?? 'unmarked';
+                            return (
+                              <div className="session-compact-row" key={student.id}>
+                                <span className="short-no-badge">{student.shortNo}</span>
+                                <strong>{student.name}</strong>
+                                <span className={`status-dot status-${status}`}>{attendanceLabels[status]}</span>
+                                <span className="compact-note">{record?.note || '无备注'}{record?.images.length ? ` · ${record.images.length} 张图片` : ''}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </details>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        </>
       )}
+
+      <Modal
+        open={newSessionOpen}
+        title="新建点名场次"
+        description={`${date} 可创建多个点名场次，并为每个场次设置标题。`}
+        onClose={() => setNewSessionOpen(false)}
+        footer={<><button className="button button-secondary" onClick={() => setNewSessionOpen(false)}>取消</button><button className="button button-primary" onClick={submitNewSession}>创建并开始点名</button></>}
+      >
+        <label className="field"><span>点名标题</span><input autoFocus value={newSessionTitle} onChange={(event) => setNewSessionTitle(event.target.value)} placeholder="例如：第一节课点名、晚点名、查寝" /></label>
+        <div className="preset-list session-title-presets">
+          {['第一节课点名', '第二节课点名', '晚点名', '查寝点名'].map((title) => <button key={title} className="preset-chip" onClick={() => setNewSessionTitle(title)}>{title}</button>)}
+        </div>
+      </Modal>
 
       <Modal
         open={Boolean(noteStudent)}
         title={`${noteStudent?.name ?? ''} · 点名备注`}
-        description="可手动输入，也可选择常用预设备注。"
-        onClose={() => setNoteStudent(null)}
-        footer={(
-          <>
-            <button className="button button-secondary" onClick={() => setNoteStudent(null)}>取消</button>
-            <button className="button button-primary" onClick={saveNote}>保存备注</button>
-          </>
-        )}
+        description="可输入文字、选择快捷备注，并添加图片凭证。"
+        onClose={closeNote}
+        footer={<><button className="button button-secondary" onClick={closeNote}>取消</button><button className="button button-primary" onClick={saveNote}>保存备注</button></>}
       >
         <div className="preset-list">
-          {presets.map((preset) => (
-            <button
-              key={preset.id}
-              className="preset-chip"
-              style={{ borderColor: `${preset.color}44`, color: preset.color }}
-              onClick={() => applyPreset(preset.text, preset.status)}
-            >
-              {preset.label}
-            </button>
-          ))}
+          {presets.map((preset) => <button key={preset.id} className="preset-chip" style={{ borderColor: `${preset.color}44`, color: preset.color }} onClick={() => applyNotePreset(preset.text, preset.status)}>{preset.label}</button>)}
         </div>
-        <label className="field">
-          <span>备注内容</span>
-          <textarea autoFocus rows={5} value={noteDraft} onChange={(event) => setNoteDraft(event.target.value)} placeholder="例如：已联系本人，确认病假并提供请假单…" />
-        </label>
-        <div className="status-hint-mini">保存后状态：{attendanceLabels[noteStatusDraft]}</div>
+        <label className="field"><span>备注内容</span><textarea autoFocus rows={5} value={noteDraft} onChange={(event) => setNoteDraft(event.target.value)} placeholder="例如：已联系本人，确认病假并提供请假单…" /></label>
+        <div className="note-image-section">
+          <div className="note-image-head"><span><Camera size={16} /> 备注图片</span><button className="text-button" onClick={() => noteUploadRef.current?.click()} disabled={noteUploading}><ImagePlus size={15} /> {noteUploading ? '处理中…' : '添加图片'}</button></div>
+          <input ref={noteUploadRef} type="file" accept="image/*" hidden onChange={(event) => { void attachNoteImage(event.target.files?.[0]); event.target.value = ''; }} />
+          <div className="attendance-image-row">
+            {noteRecord?.images.map((image) => (
+              <span className="attendance-image-wrap" key={image.id}>
+                <StoredImageThumb attachment={image} onOpen={() => setPreview({ attachment: image, studentId: noteStudent?.id ?? '', studentName: noteStudent?.name ?? '' })} />
+                <button className="attachment-remove" aria-label="删除图片" onClick={() => void removeNoteImage(image)}><Trash2 size={11} /></button>
+              </span>
+            ))}
+            {(!noteRecord?.images || noteRecord.images.length === 0) && <span className="muted image-empty-hint">暂无图片</span>}
+          </div>
+        </div>
+        <div className="note-modal-footerline">
+          <span>保存后状态：{attendanceLabels[noteStatusDraft]}</span>
+          <button className="text-button danger-text" onClick={() => void clearNote()}><Trash2 size={14} /> 一键清空备注</button>
+        </div>
       </Modal>
 
       <Modal
@@ -306,30 +703,38 @@ export function AttendancePage({ onNavigate }: AttendancePageProps) {
         description="优先从未点名的学生中抽取。"
         onClose={() => { setRandomOpen(false); setRandomStudent(null); }}
         width="sm"
-        footer={(
-          <>
-            <button className="button button-secondary" onClick={() => { setRandomOpen(false); setRandomStudent(null); }}>关闭</button>
-            <button className="button button-primary" onClick={() => randomStudent && setAttendance(selectedClassId, date, randomStudent.id, 'present')} disabled={!randomStudent}>
-              <Check size={17} /> 标记出勤
-            </button>
-          </>
-        )}
+        footer={<><button className="button button-secondary" onClick={() => { setRandomOpen(false); setRandomStudent(null); }}>关闭</button><button className="button button-primary" disabled={!randomStudent} onClick={() => {
+          if (randomStudent && session) {
+            setAttendance(session.id, randomStudent.id, 'present');
+            showToast(`${randomStudent.name} 已标记为出勤`);
+            setRandomOpen(false);
+            setRandomStudent(null);
+          }
+        }}><Check size={17} /> 标记出勤</button></>}
       >
         <div className="random-picker">
-          {randomStudent ? (
-            <>
-              <Avatar name={randomStudent.name} size="lg" />
-              <h3>{randomStudent.name}</h3>
-              <p>{randomStudent.studentNo || '未填写学号'}</p>
-            </>
-          ) : (
-            <>
-              <span className="random-placeholder"><Shuffle size={38} /></span>
-              <p>点击下方按钮抽取一名学生</p>
-            </>
-          )}
+          {randomStudent ? <><Avatar name={randomStudent.name} size="lg" /><h3>{randomStudent.name}</h3><p>班级 {randomStudent.shortNo} · {randomStudent.studentNo || '未填写学号'}</p></> : <><span className="random-placeholder"><Shuffle size={38} /></span><p>点击下方按钮抽取一名学生</p></>}
           <button className="button button-soft" onClick={drawRandom}><Shuffle size={17} /> {randomStudent ? '再抽一次' : '开始抽取'}</button>
         </div>
+      </Modal>
+
+      <Modal
+        open={Boolean(preview)}
+        title={preview ? `${preview.studentName} · 点名图片` : '点名图片'}
+        description={preview?.attachment.name}
+        onClose={() => setPreview(null)}
+        width="lg"
+        footer={<><button className="button button-secondary" onClick={() => setPreview(null)}>关闭</button>{preview && <button className="button button-danger" onClick={async () => {
+          if (!session) return;
+          if (preview.studentId && window.confirm('删除这张点名图片吗？')) {
+            await deleteImage(preview.attachment.id);
+            removeAttendanceAttachment(session.id, preview.studentId, preview.attachment.id);
+            setPreview(null);
+            showToast('图片已删除', 'info');
+          }
+        }}><Trash2 size={16} /> 删除图片</button>}</>}
+      >
+        {preview && <StoredImagePreview attachment={preview.attachment} />}
       </Modal>
     </div>
   );

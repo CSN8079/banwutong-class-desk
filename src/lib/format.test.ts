@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatDateChinese, getInitial, percent } from './format';
+import { formatDateChinese, formatDateTimeSeconds, getInitial, percent } from './format';
 
 describe('format utilities', () => {
   it('calculates bounded percentages', () => {
@@ -10,6 +10,10 @@ describe('format utilities', () => {
 
   it('formats Chinese dates', () => {
     expect(formatDateChinese('2026-11-09')).toBe('11月9日');
+  });
+
+  it('formats due dates with seconds', () => {
+    expect(formatDateTimeSeconds('2026-11-09T23:59:58')).toBe('11月9日 23:59:58');
   });
 
   it('uses the last Chinese character as avatar text', () => {

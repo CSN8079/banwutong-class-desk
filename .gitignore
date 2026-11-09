@@ -32,3 +32,4 @@ dist-ssr
 /android/.kotlin/
 /android/app/build/
 /android/build/
+/tmp-*.png

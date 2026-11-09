@@ -3,12 +3,14 @@ import { persist } from 'zustand/middleware';
 import { createSeedData, isoDate } from '../data/seed';
 import { createId } from '../lib/id';
 import type {
+  AttendanceRecord,
   AttendanceSession,
   AttendanceStatus,
   BackupData,
   ClassFormValues,
   ClassRoom,
   CollectionTask,
+  ImportStudentsOptions,
   RemarkPreset,
   Student,
   StudentFormValues,
@@ -32,23 +34,20 @@ interface AppStore {
   addStudent: (values: StudentFormValues) => Student;
   updateStudent: (id: string, values: StudentFormValues) => void;
   removeStudent: (id: string) => void;
-  importStudents: (rows: StudentFormValues[]) => number;
+  importStudents: (rows: StudentFormValues[], options?: ImportStudentsOptions) => number;
 
-  ensureSession: (classId: string, date: string) => AttendanceSession;
-  setAttendance: (
-    classId: string,
-    date: string,
-    studentId: string,
-    status: AttendanceStatus,
-    note?: string,
-  ) => void;
-  bulkAttendance: (classId: string, date: string, status: AttendanceStatus) => void;
+  createSession: (classId: string, date: string, title: string) => AttendanceSession;
+  setAttendance: (sessionId: string, studentId: string, status: AttendanceStatus, note?: string) => void;
+  bulkAttendance: (sessionId: string, status: AttendanceStatus) => void;
+  addAttendanceAttachment: (sessionId: string, studentId: string, attachment: TaskAttachment) => void;
+  removeAttendanceAttachment: (sessionId: string, studentId: string, attachmentId: string) => void;
   completeSession: (sessionId: string) => void;
 
   addTask: (input: { title: string; description: string; dueDate: string }) => CollectionTask;
   updateTask: (id: string, patch: Partial<Pick<CollectionTask, 'title' | 'description' | 'dueDate' | 'status'>>) => void;
   deleteTask: (id: string) => void;
   setSubmissionStatus: (taskId: string, studentId: string, status: SubmissionStatus) => void;
+  setSubmissionStatusBulk: (taskId: string, studentIds: string[], status: SubmissionStatus) => void;
   setSubmissionNote: (taskId: string, studentId: string, note: string) => void;
   addAttachment: (taskId: string, studentId: string, attachment: TaskAttachment) => void;
   removeAttachment: (taskId: string, studentId: string, attachmentId: string) => void;
@@ -70,6 +69,94 @@ function nowIso() {
 
 function normalizeNo(value: string) {
   return value.trim().toLocaleLowerCase();
+}
+
+function numericShortNo(value: string): number | null {
+  const text = value.trim();
+  return /^\d+$/.test(text) ? Number(text) : null;
+}
+
+function nextShortNo(students: Student[], classId: string): string {
+  const classStudents = students.filter((student) => student.classId === classId);
+  const numericValues = classStudents
+    .map((student) => numericShortNo(student.shortNo))
+    .filter((value): value is number => value !== null);
+  const max = numericValues.length > 0 ? Math.max(...numericValues) : 0;
+  const width = Math.max(
+    2,
+    ...classStudents.map((student) => student.shortNo.trim().length).filter((length) => length > 0),
+  );
+  return String(max + 1).padStart(width, '0');
+}
+
+type LegacyStudent = Omit<Student, 'shortNo' | 'bed'> & Partial<Pick<Student, 'shortNo' | 'bed'>>;
+type LegacyRecord = Omit<AttendanceRecord, 'images'> & { images?: TaskAttachment[] };
+type LegacySession = Omit<AttendanceSession, 'title' | 'records'> & {
+  title?: string;
+  topic?: string;
+  records: LegacyRecord[];
+};
+
+function normalizeStudents(input: LegacyStudent[]): Student[] {
+  const counters = new Map<string, number>();
+  const widthByClass = new Map<string, number>();
+  for (const student of input) {
+    const numeric = numericShortNo(student.shortNo ?? '');
+    if (numeric !== null) {
+      counters.set(student.classId, Math.max(counters.get(student.classId) ?? 0, numeric));
+    }
+    widthByClass.set(
+      student.classId,
+      Math.max(widthByClass.get(student.classId) ?? 2, (student.shortNo ?? '').trim().length),
+    );
+  }
+  return input.map((student) => {
+    let shortNo = student.shortNo?.trim() ?? '';
+    if (!shortNo) {
+      const next = (counters.get(student.classId) ?? 0) + 1;
+      counters.set(student.classId, next);
+      shortNo = String(next).padStart(widthByClass.get(student.classId) ?? 2, '0');
+    }
+    return {
+      ...student,
+      shortNo,
+      bed: student.bed?.trim() ?? '',
+    };
+  });
+}
+
+function normalizeSessions(input: LegacySession[]): AttendanceSession[] {
+  return input.map((session) => ({
+    ...session,
+    title: session.title?.trim() || session.topic?.trim() || '课堂点名',
+    records: session.records.map((record) => ({
+      ...record,
+      images: record.images ?? [],
+    })),
+  }));
+}
+
+function normalizeTasks(input: CollectionTask[]): CollectionTask[] {
+  return input.map((task) => ({
+    ...task,
+    dueDate: task.dueDate.includes('T') ? task.dueDate : `${task.dueDate}T23:59:59`,
+  }));
+}
+
+function patchSubmission(
+  tasks: CollectionTask[],
+  taskId: string,
+  studentId: string,
+  updater: (submission: CollectionTask['submissions'][number]) => CollectionTask['submissions'][number],
+) {
+  return tasks.map((task) => task.id === taskId
+    ? {
+        ...task,
+        submissions: task.submissions.map((submission) => submission.studentId === studentId
+          ? updater(submission)
+          : submission),
+      }
+    : task);
 }
 
 export const useAppStore = create<AppStore>()(
@@ -113,9 +200,11 @@ export const useAppStore = create<AppStore>()(
       }),
 
       addStudent: (values) => {
-        const { selectedClassId, tasks } = get();
+        const { selectedClassId, students, tasks } = get();
         const student: Student = {
           ...values,
+          shortNo: values.shortNo.trim() || nextShortNo(students, selectedClassId),
+          bed: values.bed.trim(),
           id: createId('student'),
           classId: selectedClassId,
           active: true,
@@ -152,26 +241,37 @@ export const useAppStore = create<AppStore>()(
         })),
       })),
 
-      importStudents: (rows) => {
+      importStudents: (rows, options) => {
         const { selectedClassId, students, tasks } = get();
-        const existingNumbers = new Set(
-          students.filter((item) => item.classId === selectedClassId).map((item) => normalizeNo(item.studentNo)),
-        );
+        const classStudents = students.filter((item) => item.classId === selectedClassId);
+        const existingNumbers = new Set(classStudents.map((item) => normalizeNo(item.studentNo)));
         const created: Student[] = [];
+        let workingStudents = [...students];
+
         for (const row of rows) {
           const key = normalizeNo(row.studentNo || row.name);
-          if (!row.name.trim() || existingNumbers.has(key)) continue;
-          existingNumbers.add(key);
-          created.push({
+          if (!row.name.trim() || (row.studentNo && existingNumbers.has(key))) continue;
+          if (row.studentNo) existingNumbers.add(key);
+          const automaticShortNo = nextShortNo(workingStudents, selectedClassId);
+          const tailShortNo = row.studentNo.trim().slice(-4);
+          const shortNo = row.shortNo.trim()
+            || (options?.shortNoFromStudentNo && tailShortNo
+              ? tailShortNo
+              : automaticShortNo);
+          const student: Student = {
             ...row,
+            shortNo,
+            bed: row.bed.trim(),
             id: createId('student'),
             classId: selectedClassId,
             active: true,
             createdAt: nowIso(),
-          });
+          };
+          created.push(student);
+          workingStudents = [...workingStudents, student];
         }
+
         if (created.length === 0) return 0;
-        const idSet = new Set(created.map((item) => item.id));
         set((state) => ({
           students: [...state.students, ...created],
           tasks: tasks.map((task) => task.classId === selectedClassId
@@ -179,7 +279,7 @@ export const useAppStore = create<AppStore>()(
                 ...task,
                 submissions: [
                   ...task.submissions,
-                  ...created.filter((student) => idSet.has(student.id)).map((student) => ({
+                  ...created.map((student) => ({
                     studentId: student.id,
                     status: 'pending' as const,
                     note: '',
@@ -193,16 +293,12 @@ export const useAppStore = create<AppStore>()(
         return created.length;
       },
 
-      ensureSession: (classId, date) => {
-        const existing = get().sessions.find(
-          (session) => session.classId === classId && session.date === date,
-        );
-        if (existing) return existing;
+      createSession: (classId, date, title) => {
         const session: AttendanceSession = {
           id: createId('session'),
           classId,
           date,
-          topic: '课堂点名',
+          title: title.trim() || '课堂点名',
           status: 'active',
           createdAt: nowIso(),
           records: get().students
@@ -211,6 +307,7 @@ export const useAppStore = create<AppStore>()(
               studentId: student.id,
               status: 'unmarked',
               note: '',
+              images: [],
               updatedAt: nowIso(),
             })),
         };
@@ -218,43 +315,66 @@ export const useAppStore = create<AppStore>()(
         return session;
       },
 
-      setAttendance: (classId, date, studentId, status, note) => {
-        const session = get().ensureSession(classId, date);
+      setAttendance: (sessionId, studentId, status, note) => set((state) => ({
+        sessions: state.sessions.map((session) => {
+          if (session.id !== sessionId) return session;
+          const record = session.records.find((entry) => entry.studentId === studentId);
+          const nextRecord: AttendanceRecord = record
+            ? { ...record, status, note: note ?? record.note, updatedAt: nowIso() }
+            : { studentId, status, note: note ?? '', images: [], updatedAt: nowIso() };
+          return {
+            ...session,
+            status: 'active',
+            completedAt: undefined,
+            records: record
+              ? session.records.map((entry) => entry.studentId === studentId ? nextRecord : entry)
+              : [...session.records, nextRecord],
+          };
+        }),
+      })),
+
+      bulkAttendance: (sessionId, status) => {
+        const session = get().sessions.find((item) => item.id === sessionId);
+        if (!session) return;
+        const activeStudents = get().students.filter(
+          (student) => student.classId === session.classId && student.active,
+        );
         set((state) => ({
           sessions: state.sessions.map((item) => {
-            if (item.id !== session.id) return item;
-            const record = item.records.find((entry) => entry.studentId === studentId);
-            const nextRecord = record
-              ? { ...record, status, note: note ?? record.note, updatedAt: nowIso() }
-              : { studentId, status, note: note ?? '', updatedAt: nowIso() };
+            if (item.id !== sessionId) return item;
+            const existing = new Map(item.records.map((record) => [record.studentId, record]));
             return {
               ...item,
               status: 'active',
               completedAt: undefined,
-              records: record
-                ? item.records.map((entry) => entry.studentId === studentId ? nextRecord : entry)
-                : [...item.records, nextRecord],
+              records: activeStudents.map((student) => {
+                const record = existing.get(student.id);
+                return record
+                  ? { ...record, status, updatedAt: nowIso() }
+                  : { studentId: student.id, status, note: '', images: [], updatedAt: nowIso() };
+              }),
             };
           }),
         }));
       },
 
-      bulkAttendance: (classId, date, status) => {
-        const session = get().ensureSession(classId, date);
-        const activeIds = new Set(
-          get().students.filter((student) => student.classId === classId && student.active).map((student) => student.id),
-        );
-        set((state) => ({
-          sessions: state.sessions.map((item) => item.id === session.id ? {
-            ...item,
-            status: 'active',
-            completedAt: undefined,
-            records: item.records.map((record) => activeIds.has(record.studentId)
-              ? { ...record, status, updatedAt: nowIso() }
-              : record),
-          } : item),
-        }));
-      },
+      addAttendanceAttachment: (sessionId, studentId, attachment) => set((state) => ({
+        sessions: state.sessions.map((session) => session.id === sessionId ? {
+          ...session,
+          records: session.records.map((record) => record.studentId === studentId
+            ? { ...record, images: [...record.images, attachment], updatedAt: nowIso() }
+            : record),
+        } : session),
+      })),
+
+      removeAttendanceAttachment: (sessionId, studentId, attachmentId) => set((state) => ({
+        sessions: state.sessions.map((session) => session.id === sessionId ? {
+          ...session,
+          records: session.records.map((record) => record.studentId === studentId
+            ? { ...record, images: record.images.filter((image) => image.id !== attachmentId), updatedAt: nowIso() }
+            : record),
+        } : session),
+      })),
 
       completeSession: (sessionId) => set((state) => ({
         sessions: state.sessions.map((session) => session.id === sessionId
@@ -293,44 +413,48 @@ export const useAppStore = create<AppStore>()(
       deleteTask: (id) => set((state) => ({ tasks: state.tasks.filter((task) => task.id !== id) })),
 
       setSubmissionStatus: (taskId, studentId, status) => set((state) => ({
-        tasks: state.tasks.map((task) => task.id === taskId ? {
-          ...task,
-          submissions: task.submissions.map((submission) => submission.studentId === studentId
-            ? { ...submission, status, updatedAt: nowIso() }
-            : submission),
-        } : task),
+        tasks: patchSubmission(state.tasks, taskId, studentId, (submission) => ({
+          ...submission,
+          status,
+          updatedAt: nowIso(),
+        })),
       })),
 
+      setSubmissionStatusBulk: (taskId, studentIds, status) => {
+        const ids = new Set(studentIds);
+        set((state) => ({
+          tasks: state.tasks.map((task) => task.id === taskId ? {
+            ...task,
+            submissions: task.submissions.map((submission) => ids.has(submission.studentId)
+              ? { ...submission, status, updatedAt: nowIso() }
+              : submission),
+          } : task),
+        }));
+      },
+
       setSubmissionNote: (taskId, studentId, note) => set((state) => ({
-        tasks: state.tasks.map((task) => task.id === taskId ? {
-          ...task,
-          submissions: task.submissions.map((submission) => submission.studentId === studentId
-            ? { ...submission, note, updatedAt: nowIso() }
-            : submission),
-        } : task),
+        tasks: patchSubmission(state.tasks, taskId, studentId, (submission) => ({
+          ...submission,
+          note,
+          updatedAt: nowIso(),
+        })),
       })),
 
       addAttachment: (taskId, studentId, attachment) => set((state) => ({
-        tasks: state.tasks.map((task) => task.id === taskId ? {
-          ...task,
-          submissions: task.submissions.map((submission) => submission.studentId === studentId ? {
-            ...submission,
-            attachments: [...submission.attachments, attachment],
-            status: 'completed',
-            updatedAt: nowIso(),
-          } : submission),
-        } : task),
+        tasks: patchSubmission(state.tasks, taskId, studentId, (submission) => ({
+          ...submission,
+          attachments: [...submission.attachments, attachment],
+          status: 'completed',
+          updatedAt: nowIso(),
+        })),
       })),
 
       removeAttachment: (taskId, studentId, attachmentId) => set((state) => ({
-        tasks: state.tasks.map((task) => task.id === taskId ? {
-          ...task,
-          submissions: task.submissions.map((submission) => submission.studentId === studentId ? {
-            ...submission,
-            attachments: submission.attachments.filter((item) => item.id !== attachmentId),
-            updatedAt: nowIso(),
-          } : submission),
-        } : task),
+        tasks: patchSubmission(state.tasks, taskId, studentId, (submission) => ({
+          ...submission,
+          attachments: submission.attachments.filter((item) => item.id !== attachmentId),
+          updatedAt: nowIso(),
+        })),
       })),
 
       updatePreset: (preset) => set((state) => ({
@@ -347,9 +471,9 @@ export const useAppStore = create<AppStore>()(
 
       restoreBackup: (data) => set({
         classes: data.classes,
-        students: data.students,
-        sessions: data.sessions,
-        tasks: data.tasks,
+        students: normalizeStudents(data.students),
+        sessions: normalizeSessions(data.sessions),
+        tasks: normalizeTasks(data.tasks),
         presets: data.presets,
         selectedClassId: data.classes[0]?.id ?? '',
       }),
@@ -375,7 +499,20 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'banwutong-data-v1',
-      version: 1,
+      version: 2,
+      migrate: (persistedState) => {
+        const state = persistedState as Partial<AppStore> & {
+          students?: LegacyStudent[];
+          sessions?: LegacySession[];
+          tasks?: CollectionTask[];
+        };
+        return {
+          ...state,
+          students: normalizeStudents(state.students ?? []),
+          sessions: normalizeSessions(state.sessions ?? []),
+          tasks: normalizeTasks(state.tasks ?? []),
+        } as AppStore;
+      },
       partialize: (state) => ({
         classes: state.classes,
         students: state.students,
@@ -388,8 +525,8 @@ export const useAppStore = create<AppStore>()(
   ),
 );
 
-export function getTodaySession(classId: string) {
-  return useAppStore.getState().sessions.find(
+export function getTodaySessions(classId: string) {
+  return useAppStore.getState().sessions.filter(
     (session) => session.classId === classId && session.date === isoDate(),
   );
 }

@@ -58,6 +58,7 @@ export function SettingsPage() {
   const classes = useAppStore((state) => state.classes);
   const students = useAppStore((state) => state.students);
   const tasks = useAppStore((state) => state.tasks);
+  const sessions = useAppStore((state) => state.sessions);
   const presets = useAppStore((state) => state.presets);
   const addClass = useAppStore((state) => state.addClass);
   const updateClass = useAppStore((state) => state.updateClass);
@@ -78,10 +79,17 @@ export function SettingsPage() {
   const [presetForm, setPresetForm] = useState<PresetForm>(emptyPresetForm);
   const [busy, setBusy] = useState('');
 
-  const mediaCount = useMemo(
-    () => tasks.reduce((sum, task) => sum + task.submissions.reduce((inner, submission) => inner + submission.attachments.length, 0), 0),
-    [tasks],
-  );
+  const mediaCount = useMemo(() => {
+    const taskImages = tasks.reduce(
+      (sum, task) => sum + task.submissions.reduce((inner, submission) => inner + submission.attachments.length, 0),
+      0,
+    );
+    const attendanceImages = sessions.reduce(
+      (sum, session) => sum + session.records.reduce((inner, record) => inner + record.images.length, 0),
+      0,
+    );
+    return taskImages + attendanceImages;
+  }, [tasks, sessions]);
 
   const openAddClass = () => {
     setEditingClass(null);
@@ -125,6 +133,9 @@ export function SettingsPage() {
     if (!window.confirm(`确定删除「${classRoom.name}」吗？该班级的学生、点名、任务和附件将全部删除。`)) return;
     tasks.filter((task) => task.classId === classRoom.id).forEach((task) => {
       task.submissions.forEach((submission) => submission.attachments.forEach((attachment) => void deleteImage(attachment.id)));
+    });
+    sessions.filter((session) => session.classId === classRoom.id).forEach((session) => {
+      session.records.forEach((record) => record.images.forEach((image) => void deleteImage(image.id)));
     });
     deleteClass(classRoom.id);
     showToast('班级已删除', 'info');
@@ -182,8 +193,16 @@ export function SettingsPage() {
           }
         }
       }
+      for (const session of state.sessions) {
+        for (const record of session.records) {
+          for (const image of record.images) {
+            const blob = await getImage(image.id);
+            if (blob) media[image.id] = await blobToDataUrl(blob);
+          }
+        }
+      }
       const backup: BackupData = {
-        version: 1,
+        version: 2,
         exportedAt: new Date().toISOString(),
         classes: state.classes,
         students: state.students,
@@ -239,6 +258,11 @@ export function SettingsPage() {
         for (const attachment of submission.attachments) await deleteImage(attachment.id);
       }
     }
+    for (const session of sessions) {
+      for (const record of session.records) {
+        for (const image of record.images) await deleteImage(image.id);
+      }
+    }
     clearBusinessData();
     setBusy('');
     showToast('业务数据已清空', 'info');
@@ -250,6 +274,11 @@ export function SettingsPage() {
     for (const task of tasks) {
       for (const submission of task.submissions) {
         for (const attachment of submission.attachments) await deleteImage(attachment.id);
+      }
+    }
+    for (const session of sessions) {
+      for (const record of session.records) {
+        for (const image of record.images) await deleteImage(image.id);
       }
     }
     resetDemoData();
@@ -373,7 +402,7 @@ export function SettingsPage() {
 
           <article className="about-card">
             <strong>班务通 Class Desk</strong>
-            <span>版本 1.0.0 · 本地优先</span>
+            <span>版本 1.1.0 · 本地优先</span>
             <small>专注班级点名、备注和材料收集</small>
           </article>
         </aside>
