@@ -44,6 +44,8 @@ await page.locator('.modal').getByRole('button', { name: '开始抽取' }).click
 await page.locator('.modal .random-picker h3').waitFor();
 if (await page.locator('.random-status-actions button').count() !== 4) throw new Error('Random picker status options missing');
 await page.locator('.random-status-actions').getByRole('button', { name: '迟到' }).click();
+if (!(await page.locator('.modal').isVisible())) throw new Error('Random picker closed after marking a status');
+await page.locator('.modal-footer').getByRole('button', { name: '关闭', exact: true }).click();
 
 const firstCard = page.locator('.attendance-card').first();
 await firstCard.locator('.choice-leave').click();
@@ -62,15 +64,15 @@ const attendanceHtml = await attendanceHtmlPromise;
 if (!attendanceHtml.suggestedFilename().endsWith('.html')) throw new Error('Attendance HTML filename invalid');
 
 await page.getByRole('button', { name: '完成点名', exact: true }).click();
-await page.locator('.completed-entry').click();
+await page.locator('.session-history-button').click();
 await page.locator('.modal .history-accordion').first().waitFor();
 await page.locator('.modal .history-accordion summary').first().click();
 await page.locator('.modal').getByRole('button', { name: '重新启动', exact: true }).click();
 await page.waitForTimeout(250);
-await page.locator('.page-actions').getByRole('button', { name: /新建点名/ }).click();
+await page.locator('.session-command-actions').getByRole('button', { name: /新建点名/ }).click();
 await page.locator('.modal input').fill('第二节课点名');
 await page.getByRole('button', { name: '创建并开始点名' }).click();
-await page.locator('.session-hero h2').getByText('第二节课点名').waitFor();
+await page.locator('.session-command-title-line h2').getByText('第二节课点名').waitFor();
 
 await page.goto(`${baseUrl}#tasks`, { waitUntil: 'networkidle' });
 await page.getByRole('heading', { name: '任务收集', exact: true }).waitFor();
@@ -176,9 +178,13 @@ const nextBox = await page.locator('.card-peek-next').boundingBox();
 if (!prevBox || !cardBox || !nextBox || prevBox.y + prevBox.height > cardBox.y + 1 || nextBox.y < cardBox.y + cardBox.height - 1) throw new Error('Card peeks are hidden by the main card');
 const firstName = await page.locator('.flash-name-row h2').innerText();
 await page.locator('.flash-status.choice-late').click();
+await page.waitForTimeout(450);
+const afterLateName = await page.locator('.flash-name-row h2').innerText();
+if (afterLateName !== firstName) throw new Error('Card attendance should not auto-advance after late status');
+await page.locator('.flash-status.choice-present').click();
 await page.waitForTimeout(500);
 const secondName = await page.locator('.flash-name-row h2').innerText();
-if (firstName === secondName) throw new Error('Card attendance did not auto-advance after selecting status');
+if (firstName === secondName) throw new Error('Card attendance did not auto-advance after present status');
 await assertNoHorizontalOverflow('Mobile card attendance');
 await shot('attendance-card-mobile.png');
 

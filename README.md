@@ -12,10 +12,14 @@
 - 每名学生可快速标记：出勤、迟到、请假、缺勤、未点名。
 - 支持手动备注、可配置快捷备注、备注图片和一键清空备注。
 - 点击已选状态可恢复为“未点名”；长按备注按钮可快速清空备注。
-- 卡片点名支持自动跳转下一位，并保持整页无滚动。
+- 卡片点名仅在标记“出勤”时自动跳转下一位，其他状态停留在当前学生。
+- 卡片点名保持整页无滚动。
 - “全部出勤”、重置点名、随机点名独立弹窗、完成归档。
 - 随机点名可选择未点名、已点名或全部学生，并支持出勤、迟到、请假、缺勤标记。
-- 自定义日历选择日期，已完成点名从顶部入口集中查看，并可重新启动修改。
+- 标记随机点名状态后弹窗保持打开，可继续抽取。
+- 自定义日历选择日期，已完成点名与进行中场次在同一栏目管理，并可重新启动修改。
+- 新建、随机、逐个、完成四个操作移动到点名标题下方。
+- 出勤至未点名五个统计框改为紧凑横排。
 - 已完成点名会折叠为可展开场次，支持 CSV 和 HTML 导出。
 - 点名记录自动保存在本机，并可按场次导出 CSV。
 
@@ -100,7 +104,7 @@ npm run build:desktop
 输出：
 
 ```text
-release/Banwutong-Setup-1.2.0.exe
+release/Banwutong-Setup-1.3.0.exe
 ```
 
 ### Android
@@ -142,8 +146,8 @@ npm run preview
 
 前往 [GitHub Releases](https://github.com/CSN8079/banwutong-class-desk/releases/latest) 下载：
 
-- `Banwutong-Setup-1.2.0.exe`：Windows x64 安装程序
-- `Banwutong-Android-1.2.0-debug.apk`：Android 调试签名 APK，可直接侧载
+- `Banwutong-Setup-1.3.0.exe`：Windows x64 安装程序
+- `Banwutong-Android-1.3.0-debug.apk`：Android 调试签名 APK，可直接侧载
 
 > 当前安装包未购买代码签名证书。Windows SmartScreen 或 Android“未知来源安装”可能提示风险，这是未签名/自签名应用的正常提示。
 
