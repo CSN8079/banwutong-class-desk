@@ -242,7 +242,7 @@ export function AttendancePage({ onNavigate }: AttendancePageProps) {
     const current = records.get(student.id)?.status ?? 'unmarked';
     const togglingOff = current === status;
     setAttendance(session.id, student.id, togglingOff ? 'unmarked' : status);
-    if (!togglingOff && cardIndex < students.length - 1) {
+    if (status === 'present' && !togglingOff && cardIndex < students.length - 1) {
       window.setTimeout(() => setCardIndex((index) => Math.min(students.length - 1, index + 1)), 260);
     }
   };
@@ -459,9 +459,7 @@ export function AttendancePage({ onNavigate }: AttendancePageProps) {
   const markRandomStatus = (status: Exclude<AttendanceStatus, 'unmarked'>) => {
     if (!session || !randomStudent) return;
     setAttendance(session.id, randomStudent.id, status);
-    showToast(`${randomStudent.name} 已标记为${attendanceLabels[status]}`);
-    setRandomOpen(false);
-    setRandomStudent(null);
+    showToast(`${randomStudent.name} 已标记为${attendanceLabels[status]}，可继续抽取`);
   };
 
   if (students.length === 0) {
@@ -482,14 +480,6 @@ export function AttendancePage({ onNavigate }: AttendancePageProps) {
           eyebrow="ATTENDANCE"
           title="课堂点名"
           description={`${classRoom?.name ?? ''} · 一天可创建多个点名场次，所有修改自动保存`}
-          actions={(
-            <>
-              <button className="button button-secondary" onClick={openNewSession}><Plus size={17} /> 新建点名</button>
-              <button className="button button-secondary" disabled={!session} onClick={openRandom}><Shuffle size={17} /> 随机点名</button>
-              {session && <button className="button button-secondary" onClick={() => setViewMode('card')}><Images size={17} /> 逐个点名</button>}
-              {session && <button className="button button-primary" onClick={finishAttendance}><Check size={18} /> 完成点名</button>}
-            </>
-          )}
         />
       )}
 
@@ -576,42 +566,51 @@ export function AttendancePage({ onNavigate }: AttendancePageProps) {
               </button>
               {date !== isoDate() && <button className="text-button" onClick={() => { setDate(isoDate()); setSelectedSessionId(''); }}>回到今天</button>}
             </div>
-            <div className="active-session-tabs">
-              {activeSessions.length === 0 && <span className="no-session-label">当天暂无进行中的点名</span>}
-              {activeSessions.map((item) => (
-                <button key={item.id} className={item.id === effectiveSessionId ? 'active' : ''} onClick={() => setSelectedSessionId(item.id)}>
-                  {item.title}
-                </button>
-              ))}
-            </div>
           </section>
 
-          <button className="completed-entry panel" onClick={() => setHistoryOpen(true)}>
-            <span className="completed-entry-icon"><CheckCircle2 size={20} /></span>
-            <span className="completed-entry-copy">
-              <strong>已完成点名</strong>
-              <small>{completedSessions.length > 0 ? `查看当天 ${completedSessions.length} 个已完成场次，可重新启动修改` : '当天暂无已完成场次'}</small>
-            </span>
-            <ChevronRight size={19} />
-          </button>
-
-          {!session ? (
-            <section className="panel">
-              <EmptyState
-                icon={<CalendarDays size={29} />}
-                title={`${date} 还没有进行中的点名`}
-                description="一天可以创建多次点名，并为每次点名设置标题。已完成场次会折叠显示在下方。"
-                action={<button className="button button-primary" onClick={openNewSession}><Plus size={17} /> 新建点名</button>}
-              />
-            </section>
-          ) : (
-            <>
-              <section className="session-hero panel">
-                <div>
-                  <span className="eyebrow">CURRENT SESSION</span>
-                  <h2>{session.title}</h2>
-                  <p>{date} · 创建于 {formatDateTime(session.createdAt)}</p>
+          <section className={`session-command-panel panel ${session ? '' : 'no-active-session'}`}>
+            <div className="session-command-main">
+              <div className="session-command-title-block">
+                <span className="eyebrow">{session ? 'CURRENT SESSION' : 'ATTENDANCE SESSION'}</span>
+                <div className="session-command-title-line">
+                  <h2>{session?.title ?? '暂无进行中的点名'}</h2>
+                  {session && <span className="session-active-chip">进行中</span>}
                 </div>
+                <p>{session ? `${date} · 创建于 ${formatDateTime(session.createdAt)}` : `${date} · 新建一个点名场次开始记录`}</p>
+                {session && (
+                  <div className="session-progress-row">
+                    <span>已点名 <strong>{marked}</strong> / {students.length}</span>
+                    <div className="session-progress-track"><i style={{ width: `${students.length ? (marked / students.length) * 100 : 0}%` }} /></div>
+                  </div>
+                )}
+              </div>
+              <button className="session-history-button" onClick={() => setHistoryOpen(true)}>
+                <span className="session-history-icon"><CheckCircle2 size={18} /></span>
+                <span><strong>已完成点名</strong><small>{completedSessions.length} 个场次</small></span>
+                <ChevronRight size={18} />
+              </button>
+            </div>
+
+            <div className="session-tabs-action-row">
+              <div className="active-session-tabs">
+                {activeSessions.length === 0 && <span className="no-session-label">当天暂无进行中的点名</span>}
+                {activeSessions.map((item) => (
+                  <button key={item.id} className={item.id === effectiveSessionId ? 'active' : ''} onClick={() => setSelectedSessionId(item.id)}>
+                    {item.title}
+                  </button>
+                ))}
+              </div>
+              <div className="session-command-actions">
+                <button className="button button-secondary" onClick={openNewSession}><Plus size={17} /> 新建点名</button>
+                <button className="button button-secondary" disabled={!session} onClick={openRandom}><Shuffle size={17} /> 随机点名</button>
+                <button className="button button-secondary" disabled={!session} onClick={() => setViewMode('card')}><Images size={17} /> 逐个点名</button>
+                <button className="button button-primary" disabled={!session} onClick={finishAttendance}><Check size={18} /> 完成点名</button>
+              </div>
+            </div>
+
+            {session ? (
+              <div className="session-command-footer">
+                <span className="session-command-hint">正在进行的点名与已完成场次都在本栏目管理</span>
                 <div className="session-export-block">
                   <span className="export-caption">导出本次点名记录</span>
                   <div className="session-export-actions">
@@ -623,15 +622,20 @@ export function AttendancePage({ onNavigate }: AttendancePageProps) {
                     </button>
                   </div>
                 </div>
-              </section>
+              </div>
+            ) : (
+              <div className="session-command-hint empty-hint">点击“新建点名”创建场次，或点击“已完成点名”查看历史记录。</div>
+            )}
+          </section>
 
-              <section className="attendance-stats">
-                <div className="attendance-stat primary"><span>已点名</span><strong>{marked}<small> / {students.length}</small></strong><div className="mini-progress"><i style={{ width: `${students.length ? (marked / students.length) * 100 : 0}%` }} /></div></div>
-                <button className={`attendance-stat stat-present ${filter === 'present' ? 'active' : ''}`} onClick={() => setFilter(filter === 'present' ? 'all' : 'present')}><span><CheckCircle2 size={16} /> 出勤</span><strong>{countByStatus('present')}</strong></button>
-                <button className={`attendance-stat stat-late ${filter === 'late' ? 'active' : ''}`} onClick={() => setFilter(filter === 'late' ? 'all' : 'late')}><span><Clock3 size={16} /> 迟到</span><strong>{countByStatus('late')}</strong></button>
-                <button className={`attendance-stat stat-leave ${filter === 'leave' ? 'active' : ''}`} onClick={() => setFilter(filter === 'leave' ? 'all' : 'leave')}><span><CalendarDays size={16} /> 请假</span><strong>{countByStatus('leave')}</strong></button>
-                <button className={`attendance-stat stat-absent ${filter === 'absent' ? 'active' : ''}`} onClick={() => setFilter(filter === 'absent' ? 'all' : 'absent')}><span><XCircle size={16} /> 缺勤</span><strong>{countByStatus('absent')}</strong></button>
-                <button className={`attendance-stat stat-unmarked ${filter === 'unmarked' ? 'active' : ''}`} onClick={() => setFilter(filter === 'unmarked' ? 'all' : 'unmarked')}><span><UserRoundX size={16} /> 未点名</span><strong>{countByStatus('unmarked')}</strong></button>
+          {session && (
+            <>
+              <section className="attendance-stats compact-stats">
+                <button className={`attendance-stat stat-present ${filter === 'present' ? 'active' : ''}`} onClick={() => setFilter(filter === 'present' ? 'all' : 'present')}><span><CheckCircle2 size={15} /> 出勤</span><strong>{countByStatus('present')}</strong></button>
+                <button className={`attendance-stat stat-late ${filter === 'late' ? 'active' : ''}`} onClick={() => setFilter(filter === 'late' ? 'all' : 'late')}><span><Clock3 size={15} /> 迟到</span><strong>{countByStatus('late')}</strong></button>
+                <button className={`attendance-stat stat-leave ${filter === 'leave' ? 'active' : ''}`} onClick={() => setFilter(filter === 'leave' ? 'all' : 'leave')}><span><CalendarDays size={15} /> 请假</span><strong>{countByStatus('leave')}</strong></button>
+                <button className={`attendance-stat stat-absent ${filter === 'absent' ? 'active' : ''}`} onClick={() => setFilter(filter === 'absent' ? 'all' : 'absent')}><span><XCircle size={15} /> 缺勤</span><strong>{countByStatus('absent')}</strong></button>
+                <button className={`attendance-stat stat-unmarked ${filter === 'unmarked' ? 'active' : ''}`} onClick={() => setFilter(filter === 'unmarked' ? 'all' : 'unmarked')}><span><UserRoundX size={15} /> 未点名</span><strong>{countByStatus('unmarked')}</strong></button>
               </section>
 
               <section className="attendance-toolbar panel">
@@ -693,10 +697,8 @@ export function AttendancePage({ onNavigate }: AttendancePageProps) {
               )}
             </>
           )}
-
         </>
       )}
-
       <Modal
         open={newSessionOpen}
         title="新建点名场次"

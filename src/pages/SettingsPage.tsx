@@ -418,7 +418,7 @@ export function SettingsPage() {
 
           <article className="about-card">
             <strong>班务通 Class Desk</strong>
-            <span>版本 1.2.0 · 本地优先</span>
+            <span>版本 1.3.0 · 本地优先</span>
             <small>专注班级点名、备注和材料收集</small>
           </article>
         </aside>

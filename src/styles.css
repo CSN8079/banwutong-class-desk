@@ -1327,3 +1327,60 @@ html[data-theme='dark'] .completed-entry-icon { background: #1c3a30; color: #9bd
 }
 
 .submission-choice, .status-choice { white-space: nowrap; }
+
+
+/* v1.3 attendance workspace layout */
+.session-command-panel { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
+.session-command-main { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.session-command-title-block { min-width: 0; flex: 1; }
+.session-command-title-line { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.session-command-title-line h2 { margin: 0; font-size: 22px; letter-spacing: -.025em; }
+.session-active-chip { padding: 4px 9px; border-radius: 99px; background: var(--green-soft); color: var(--green-dark); font-size: 9px; font-weight: 800; }
+.session-command-title-block > p { margin: 6px 0 0; color: var(--muted); font-size: 10.5px; }
+.session-progress-row { display: flex; align-items: center; gap: 10px; max-width: 460px; margin-top: 10px; color: var(--muted); font-size: 9.5px; }
+.session-progress-row strong { color: var(--green-dark); font-size: 12px; }
+.session-progress-track { flex: 1; height: 5px; border-radius: 99px; background: var(--line); overflow: hidden; }
+.session-progress-track i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--green), #72c19e); }
+.session-history-button { flex: 0 0 auto; min-width: 155px; border: 1px solid var(--line); border-radius: 12px; background: #f8faf7; color: var(--ink-soft); padding: 9px 11px; display: flex; align-items: center; gap: 8px; text-align: left; }
+.session-history-button:hover { border-color: #bdd4c8; background: var(--green-pale); }
+.session-history-icon { width: 32px; height: 32px; border-radius: 9px; background: var(--green-soft); color: var(--green); display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+.session-history-button > span:nth-child(2) { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.session-history-button strong { font-size: 10.5px; }
+.session-history-button small { color: var(--muted); font-size: 8.5px; }
+.session-history-button > svg { color: var(--muted-light); }
+.session-tabs-action-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 11px; border-top: 1px dashed var(--line); }
+.session-command-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.session-command-actions .button { min-height: 37px; padding: 0 11px; font-size: 10.5px; }
+.session-command-footer { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.session-command-hint { color: var(--muted-light); font-size: 9px; }
+.session-command-hint.empty-hint { padding-top: 2px; }
+.attendance-stats.compact-stats { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; }
+.compact-stats .attendance-stat { min-height: 53px; padding: 7px 10px; flex-direction: row; align-items: center; justify-content: space-between; gap: 5px; border-radius: 11px; }
+.compact-stats .attendance-stat span { font-size: 10px; gap: 4px; }
+.compact-stats .attendance-stat strong { font-size: 19px; }
+@media (max-width: 900px) {
+  .session-command-panel { padding: 15px 14px; gap: 10px; }
+  .session-command-main { flex-direction: column; gap: 10px; }
+  .session-history-button { width: 100%; }
+  .session-tabs-action-row { flex-direction: column; align-items: stretch; }
+  .session-command-actions { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+  .session-command-actions .button { width: 100%; }
+  .session-command-footer { flex-direction: column; align-items: stretch; }
+  .session-export-block { align-items: stretch; }
+  .session-export-actions { width: 100%; }
+  .session-export-actions .button { flex: 1; }
+  .compact-stats .attendance-stat { padding: 7px 5px; min-height: 51px; }
+  .compact-stats .attendance-stat span { font-size: 8.5px; }
+  .compact-stats .attendance-stat strong { font-size: 17px; }
+}
+@media (max-width: 440px) {
+  .compact-stats .attendance-stat { flex-direction: column; justify-content: center; gap: 2px; }
+  .compact-stats .attendance-stat span { flex-direction: column; gap: 1px; }
+  .compact-stats .attendance-stat span svg { width: 13px; height: 13px; }
+  .compact-stats .attendance-stat strong { font-size: 16px; }
+}
+
+html[data-theme='dark'] .session-history-button { background: #131c18; border-color: #2a3832; color: var(--ink-soft); }
+html[data-theme='dark'] .session-history-button:hover { background: #1c2b24; border-color: #3c5c4c; }
+html[data-theme='dark'] .session-history-icon { background: #1c3a30; color: #9bdfc3; }
+html[data-theme='dark'] .session-progress-track { background: #2a3832; }
